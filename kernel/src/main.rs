@@ -104,16 +104,16 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     serial_println!("[GRAPHICS] Drawing boot screen in graphics mode...");
     gui::graphics::with_graphics(|gfx| {
         gfx.clear(gui::graphics::Color::Black);
-        // Draw boot screen text in graphics mode
-        gfx.draw_text(200, 200, "AGENTIC OPERATING SYSTEM", gui::graphics::Color::Cyan as u8);
-        gfx.draw_text(250, 220, "Genesis Awakening...", gui::graphics::Color::Cyan as u8);
-        gfx.draw_text(240, 250, "QuantumDynamX.com", gui::graphics::Color::Cyan as u8);
+        // Draw boot screen text in graphics mode (centered)
+        gfx.draw_text(180, 200, "AGENTIC OPERATING SYSTEM", gui::graphics::Color::Cyan as u8);
+        gfx.draw_text(250, 230, "Genesis Awakening...", gui::graphics::Color::Cyan as u8);
+        gfx.draw_text(220, 260, "QuantumDynamX.com", gui::graphics::Color::Cyan as u8);
         gfx.swap_buffers(); // Display immediately
     });
     serial_println!("[GRAPHICS] Boot screen drawn in graphics mode");
     
-    // Brief pause to show boot screen
-    delay_ms(500);
+    // Longer pause to see boot screen (2 seconds)
+    delay_ms(2000);
     
     // Clear and draw test pattern
     serial_println!("[GRAPHICS] Clearing for desktop...");
@@ -213,13 +213,13 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     desktop::render();
     serial_println!("[DESKTOP] Desktop rendered!");
     
-    // CRITICAL: Force a buffer swap to ensure QEMU displays the graphics
-    // This ensures the desktop/console is visible, not the old boot screen
-    serial_println!("[DESKTOP] Forcing buffer swap to display graphics...");
-    gui::graphics::with_graphics(|gfx| {
-        gfx.swap_buffers();
-    });
-    serial_println!("[DESKTOP] Graphics buffer swapped - QEMU window should update!");
+    // CRITICAL: Ensure desktop stays visible - render multiple times to force display
+    serial_println!("[DESKTOP] Ensuring desktop stays visible...");
+    for _ in 0..3 {
+        desktop::render();
+        delay_ms(100); // Small delay between renders
+    }
+    serial_println!("[DESKTOP] Desktop should now be visible in QEMU window!");
     
     // Print agent status
     supervisor.print_status();
@@ -286,8 +286,9 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
             static mut RENDER_COUNTER: u64 = 0;
             unsafe {
                 RENDER_COUNTER += 1;
-                // Re-render every 1000 ticks (roughly every second) to keep console fresh
-                if RENDER_COUNTER % 1000 == 0 {
+                // Re-render more frequently (every 100 ticks) to keep desktop visible
+                // This prevents the screen from going black
+                if RENDER_COUNTER % 100 == 0 {
                     gui::desktop::render();
                 }
             }

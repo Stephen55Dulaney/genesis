@@ -21,7 +21,7 @@ use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
 use crate::{println, serial_println};
 use spin::{Lazy, Mutex};
 use pic8259::ChainedPics;
-use pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, ScancodeSet1};
+use pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, ScancodeSet1, KeyState};
 // SHELL is accessed via crate::shell::Shell::push_char
 
 /// PIC offset - we remap hardware interrupts to start at 32
@@ -144,16 +144,37 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
     let mut keyboard = KEYBOARD.lock();
     
     if let Ok(Some(key_event)) = keyboard.add_byte(scancode) {
+        // CRITICAL: Only process key PRESSES, not releases
+        // This prevents duplicate character processing and modifier key noise
+        if key_event.state != KeyState::Pressed {
+            // Key release - ignore it (but still acknowledge interrupt)
+            unsafe {
+                PICS.lock().notify_end_of_interrupt(InterruptIndex::Keyboard.as_u8());
+            }
+            return;
+        }
+        
         if let Some(key) = keyboard.process_keyevent(key_event) {
             match key {
                 DecodedKey::Unicode(character) => {
-                    // Send character to shell queue
-                    serial_println!("[KEY] Character received: '{}' (U+{:04X})", character, character as u32);
-                    crate::shell::Shell::push_char(character);
+                    // Check if this is Enter/Return as Unicode (some keyboards send it this way)
+                    if character == '\n' || character == '\r' {
+                        serial_println!("[KEY] Enter/Return received as Unicode - executing command");
+                        crate::shell::Shell::push_char('\n');
+                    } else {
+                        // Send character to shell queue
+                        serial_println!("[KEY] Character received: '{}' (U+{:04X})", character, character as u32);
+                        crate::shell::Shell::push_char(character);
+                    }
                 }
                 DecodedKey::RawKey(key) => {
                     // Handle special keys
                     match key {
+                        pc_keyboard::KeyCode::Enter => {
+                            // CRITICAL: Enter key sends newline to execute command
+                            serial_println!("[KEY] Enter key pressed - executing command");
+                            crate::shell::Shell::push_char('\n');
+                        }
                         pc_keyboard::KeyCode::Backspace => {
                             // Send backspace character to shell
                             crate::shell::Shell::push_char('\u{08}');
@@ -201,7 +222,8 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
                             serial_println!("[KEY] Special: {:?}", key);
                         }
                         _ => {
-                            // Don't log modifier keys (Shift, Alt, Ctrl, etc.) - too noisy
+                            // Log unhandled keys to debug Enter key issue
+                            serial_println!("[KEY] Unhandled RawKey: {:?}", key);
                         }
                     }
                 }
