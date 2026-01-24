@@ -1,0 +1,8 @@
+# Project Genesis - Rust Toolchain Configuration
+# We use nightly for unstable features required by bare-metal OS development
+
+[toolchain]
+channel = "nightly"
+components = ["rust-src", "rustfmt", "clippy", "llvm-tools-preview"]
+targets = ["x86_64-unknown-none"]
+

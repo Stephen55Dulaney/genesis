@@ -1,0 +1,29 @@
+# Project Genesis - Agentic Operating System
+# "Where Agents, Classical, Quantum & Humans Collaborate Together"
+# Part of the QuantumDynamX umbrella
+
+[workspace]
+resolver = "2"
+members = [
+    "kernel",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["QuantumDynamX Team"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/quantumdynamx/genesis"
+description = "An agentic operating system built from the ground up in Rust"
+
+[workspace.dependencies]
+spin = "0.9"
+x86_64 = "0.15"
+pic8259 = "0.11"
+pc-keyboard = "0.8"
+crossbeam-queue = { version = "0.3", default-features = false, features = ["alloc"] }
+conquer-once = { version = "0.4", default-features = false }
+lazy_static = { version = "1.4", features = ["spin_no_std"] }
+volatile = "0.4"
+linked_list_allocator = "0.10"
+bootloader = "0.9"

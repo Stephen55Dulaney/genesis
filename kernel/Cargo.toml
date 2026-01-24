@@ -1,0 +1,31 @@
+[package]
+name = "genesis_kernel"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Genesis OS Kernel - The Agentic Core"
+
+[dependencies]
+# Bootloader for creating bootable disk image
+bootloader = { version = "0.9", features = ["map_physical_memory"] }
+
+# Spinlock for interrupt-safe synchronization  
+spin = { workspace = true, features = ["lazy"] }
+
+# x86_64 CPU features (IDT, paging, I/O ports)
+x86_64 = { workspace = true }
+
+# PIC (Programmable Interrupt Controller) driver
+pic8259 = "0.11"
+
+# PS/2 keyboard scancode decoder
+pc-keyboard = "0.8"
+
+# Lock-free queues for interrupt communication
+crossbeam-queue = { workspace = true }
+conquer-once = { workspace = true }
+lazy_static = { workspace = true }
+
+# Heap allocator (linked list based)
+linked_list_allocator = "0.10"
