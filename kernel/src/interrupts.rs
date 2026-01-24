@@ -132,9 +132,13 @@ extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFr
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
     use x86_64::instructions::port::Port;
     
+    serial_println!("[KEYBOARD] Interrupt received!");
+    
     // Read the scancode from the keyboard controller
     let mut port = Port::new(0x60);
     let scancode: u8 = unsafe { port.read() };
+    
+    serial_println!("[KEYBOARD] Scancode: 0x{:02X}", scancode);
     
     // Try to decode the scancode into a character
     let mut keyboard = KEYBOARD.lock();
@@ -144,6 +148,7 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
             match key {
                 DecodedKey::Unicode(character) => {
                     // Send character to shell queue
+                    serial_println!("[KEY] Character received: '{}' (U+{:04X})", character, character as u32);
                     crate::shell::Shell::push_char(character);
                 }
                 DecodedKey::RawKey(key) => {
@@ -153,11 +158,28 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
                             // Send backspace character to shell
                             crate::shell::Shell::push_char('\u{08}');
                         }
+                        pc_keyboard::KeyCode::Escape => {
+                            // Toggle between text and graphics mode (Mac-friendly alternative to F1)
+                            serial_println!("[KEY] Escape pressed - toggling VGA mode...");
+                            unsafe {
+                                crate::gui::graphics::toggle_mode();
+                            }
+                            let current = crate::gui::graphics::current_mode();
+                            serial_println!("[MODE] Switched to {:?} mode", current);
+                        }
+                        pc_keyboard::KeyCode::F1 => {
+                            // Toggle between text and graphics mode
+                            serial_println!("[KEY] F1 pressed - toggling VGA mode...");
+                            unsafe {
+                                crate::gui::graphics::toggle_mode();
+                            }
+                            let current = crate::gui::graphics::current_mode();
+                            serial_println!("[MODE] Switched to {:?} mode", current);
+                        }
                         pc_keyboard::KeyCode::ArrowLeft | 
                         pc_keyboard::KeyCode::ArrowRight |
                         pc_keyboard::KeyCode::ArrowUp |
                         pc_keyboard::KeyCode::ArrowDown |
-                        pc_keyboard::KeyCode::F1 |
                         pc_keyboard::KeyCode::F2 |
                         pc_keyboard::KeyCode::F3 |
                         pc_keyboard::KeyCode::F4 |
@@ -166,8 +188,15 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
                         pc_keyboard::KeyCode::F7 |
                         pc_keyboard::KeyCode::F8 |
                         pc_keyboard::KeyCode::F9 |
-                        pc_keyboard::KeyCode::F10 |
-                        pc_keyboard::KeyCode::F11 |
+                        pc_keyboard::KeyCode::F10 => {
+                            serial_println!("[KEY] Special: {:?}", key);
+                        }
+                        pc_keyboard::KeyCode::F11 => {
+                            // Exit fullscreen hint (QEMU fullscreen is controlled by QEMU, not Genesis)
+                            serial_println!("[KEY] F11 pressed");
+                            serial_println!("[INFO] To exit QEMU fullscreen: Press Ctrl+Alt+F (or Ctrl+Alt+G)");
+                            serial_println!("[INFO] Or use Ctrl+A, X to quit QEMU entirely");
+                        }
                         pc_keyboard::KeyCode::F12 => {
                             serial_println!("[KEY] Special: {:?}", key);
                         }

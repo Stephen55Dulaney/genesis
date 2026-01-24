@@ -42,11 +42,13 @@ fi
 # Run QEMU with the bootloader
 # -serial stdio: Redirect serial port to terminal for debug output
 # -display default: Use default display (SDL/Cocoa on Mac)
+# -vga std: Standard VGA emulation (required for Mode 12h)
 # -m 128M: 128MB of RAM
 # -no-reboot: Exit on triple fault instead of rebooting
 $QEMU_BINARY \
     -drive format=raw,file="$KERNEL_PATH" \
     -serial stdio \
+    -vga std \
     -m 128M \
     -no-reboot \
     -no-shutdown

@@ -117,18 +117,30 @@ impl DesktopLayout {
     /// Render the desktop layout to graphics
     pub fn render(&self) {
         use super::graphics;
+        use super::console;
         
         graphics::with_graphics(|gfx| {
             // Clear screen
             gfx.clear(graphics::Color::Black);
             
-            // Render each zone
+            // Adjust zone heights to leave room for console at bottom
+            let console_height = if console::is_initialized() { 120 } else { 0 };
+            let available_height = self.height - console_height;
+            
+            // Render each zone (adjusted for console space)
             for zone in &self.zones {
+                // Scale zone height to fit available space
+                let zone_height = if zone.y + zone.height > available_height {
+                    available_height.saturating_sub(zone.y)
+                } else {
+                    zone.height
+                };
+                
                 // Draw zone background
-                gfx.draw_rect(zone.x, zone.y, zone.width, zone.height, zone.bg_color);
+                gfx.draw_rect(zone.x, zone.y, zone.width, zone_height, zone.bg_color);
                 
                 // Draw zone border
-                gfx.draw_rect_outline(zone.x, zone.y, zone.width, zone.height, zone.text_color);
+                gfx.draw_rect_outline(zone.x, zone.y, zone.width, zone_height, zone.text_color);
                 
                 // Draw zone content (text)
                 // Simple text rendering: split by lines and draw each
@@ -136,7 +148,7 @@ impl DesktopLayout {
                 let mut y_offset = zone.y + 10; // Start 10 pixels from top
                 
                 for line in lines {
-                    if y_offset + 8 > zone.y + zone.height {
+                    if y_offset + 8 > zone.y + zone_height {
                         break; // Don't overflow zone
                     }
                     
@@ -144,6 +156,12 @@ impl DesktopLayout {
                     gfx.draw_text(zone.x + 5, y_offset, line, zone.text_color);
                     y_offset += 8; // Line height
                 }
+            }
+            
+            // Render console overlay at bottom (if initialized)
+            // Pass graphics context directly to avoid nested mutex locking
+            if console::is_initialized() {
+                console::render_to_graphics(gfx, self.width, self.height);
             }
             
             // Swap buffers to display

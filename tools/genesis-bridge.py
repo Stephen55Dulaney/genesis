@@ -39,12 +39,14 @@ except ImportError:
 QEMU_CMD = [
     "qemu-system-x86_64",
     "-drive", "format=raw,file=/Users/stephendulaney/genesis/target/x86_64-unknown-none/release/bootimage-genesis_kernel.bin",
-    "-m", "32M",
+    "-m", "128M",  # Increased memory for graphics
     "-machine", "pc",
     "-cpu", "max",
     "-serial", "stdio",
     "-display", "default",  # Show graphics window for GUI testing
-    "-vga", "std"  # Standard VGA for graphics mode support
+    "-vga", "std",  # Standard VGA for graphics mode support
+    "-no-reboot",  # Exit on triple fault instead of rebooting
+    "-no-shutdown"  # Don't shutdown on exit
 ]
 
 # Initialize Gemini if available

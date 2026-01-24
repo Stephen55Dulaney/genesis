@@ -91,6 +91,12 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     }
     serial_println!("[GRAPHICS] Graphics system initialized");
     
+    // CRITICAL: Clear the VGA text buffer so QEMU doesn't show old boot screen
+    // After switching to graphics mode, we need to hide the text buffer
+    serial_println!("[GRAPHICS] Clearing VGA text buffer to hide boot screen...");
+    vga_buffer::clear_screen();
+    serial_println!("[GRAPHICS] Text buffer cleared");
+    
     // Enable double buffering if possible
     if let Some(_) = gui::graphics::with_graphics(|gfx| {
         gfx.enable_double_buffering().ok()
@@ -99,6 +105,15 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     } else {
         serial_println!("[GRAPHICS] Double buffering unavailable (using single buffer)");
     }
+    
+    // CRITICAL: Clear screen and ensure graphics mode is active
+    // The boot screen was drawn to text buffer - we need to clear graphics buffer
+    serial_println!("[GRAPHICS] Clearing graphics screen...");
+    gui::graphics::with_graphics(|gfx| {
+        gfx.clear(gui::graphics::Color::Black);
+        gfx.swap_buffers(); // Ensure cleared screen is displayed
+    });
+    serial_println!("[GRAPHICS] Graphics screen cleared");
     
     // Draw initial test pattern
     gui::graphics::with_graphics(|gfx| {
@@ -158,6 +173,22 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     use gui::desktop;
     desktop::init(gui::graphics::WIDTH, gui::graphics::HEIGHT);
     
+    // Initialize custom font system (Agent Alliance Academy font)
+    use gui::fonts;
+    let academy_font = fonts::create_academy_font();
+    fonts::set_font(academy_font);
+    serial_println!("[FONTS] Agent Alliance Academy font loaded");
+    serial_println!("[FONTS] Clean, professional, educational aesthetic");
+    
+    // Initialize graphics console overlay (for visible command input/output)
+    use gui::console;
+    console::init(gui::graphics::WIDTH, gui::graphics::HEIGHT);
+    console::add_output_line(String::from("=== GENESIS CONSOLE ==="));
+    console::add_output_line(String::from("Graphics Console Ready"));
+    console::add_output_line(String::from("Type commands here!"));
+    serial_println!("[CONSOLE] Graphics console overlay initialized");
+    serial_println!("[CONSOLE] Console should appear at bottom of graphics window");
+    
     // Get Archimedes's ambition for desktop display
     // For now, we'll create a default layout - in full implementation,
     // we'd query Archimedes agent for its ambition
@@ -175,10 +206,18 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     
     serial_println!("[DESKTOP] Desktop layout created");
     
-    // Render desktop
+    // Render desktop (includes console overlay)
     serial_println!("[DESKTOP] Rendering organized desktop...");
     desktop::render();
     serial_println!("[DESKTOP] Desktop rendered!");
+    
+    // CRITICAL: Force a buffer swap to ensure QEMU displays the graphics
+    // This ensures the desktop/console is visible, not the old boot screen
+    serial_println!("[DESKTOP] Forcing buffer swap to display graphics...");
+    gui::graphics::with_graphics(|gfx| {
+        gfx.swap_buffers();
+    });
+    serial_println!("[DESKTOP] Graphics buffer swapped - QEMU window should update!");
     
     // Print agent status
     supervisor.print_status();
@@ -238,6 +277,19 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         
         // Process agent ticks
         supervisor.tick();
+        
+        // Periodically re-render desktop in graphics mode to keep console visible
+        // (This ensures console updates even if render wasn't triggered by input)
+        if gui::graphics::current_mode() == gui::graphics::VgaMode::Graphics {
+            static mut RENDER_COUNTER: u64 = 0;
+            unsafe {
+                RENDER_COUNTER += 1;
+                // Re-render every 1000 ticks (roughly every second) to keep console fresh
+                if RENDER_COUNTER % 1000 == 0 {
+                    gui::desktop::render();
+                }
+            }
+        }
         
         // Halt the CPU until the next interrupt
         x86_64::instructions::hlt();

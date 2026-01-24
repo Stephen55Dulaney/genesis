@@ -6,16 +6,34 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::vec;
+use alloc::format;
 use crate::{print, println};
 use crate::agents::supervisor::Supervisor;
 use spin::{Mutex, Lazy};
 use crossbeam_queue::ArrayQueue;
 
 /// Print to both VGA and serial (so bridge can see it)
+/// Also adds to graphics console if in graphics mode
 macro_rules! shell_print {
+    () => {
+        {
+            println!();
+            serial_println!();
+        }
+    };
     ($($arg:tt)*) => {
-        println!($($arg)*);
-        serial_println!($($arg)*);
+        {
+            let output = alloc::format!($($arg)*);
+            println!("{}", output);
+            serial_println!("{}", output);
+            
+            // Add to graphics console if in graphics mode
+            if crate::gui::graphics::current_mode() == crate::gui::graphics::VgaMode::Graphics {
+                crate::gui::console::add_output_line(output);
+                // Re-render desktop to show updated console
+                crate::gui::desktop::render();
+            }
+        }
     };
 }
 
@@ -60,7 +78,6 @@ impl Shell {
     /// Initialize the shell and print the first prompt
     pub fn init(&self) {
         use crate::serial_println;
-        use crate::serial_print;
         
         println!();
         println!("=========================================");
@@ -75,7 +92,7 @@ impl Shell {
         serial_println!("  GENESIS INTERACTIVE SHELL [READY]");
         serial_println!("  Type 'help' for commands");
         serial_println!("=========================================");
-        serial_print!("{}", self.prompt);
+        crate::serial_print!("{}", self.prompt);
     }
 
     /// Add a character to the input queue (safe to call from interrupts)
@@ -106,15 +123,29 @@ impl Shell {
                 if self.buffer.starts_with("[LLM_RESPONSE]") {
                     // Display the response instead of executing it
                     let response = self.buffer.strip_prefix("[LLM_RESPONSE]").unwrap_or(&self.buffer).trim();
+                    // shell_print! macro already adds to console, so no need to add again
                     shell_print!("{}", response);
                 } else {
                     // Normal command execution
+                    // Add command to console output
+                    if crate::gui::graphics::current_mode() == crate::gui::graphics::VgaMode::Graphics {
+                        let cmd_line = format!("{}{}", self.prompt, self.buffer);
+                        crate::gui::console::add_output_line(cmd_line);
+                    }
+                    
                     self.execute_command(supervisor);
                 }
                 
                 self.buffer.clear();
                 print!("{}", self.prompt);
-                serial_print!("{}", self.prompt); // Also to serial
+                crate::serial_print!("{}", self.prompt); // Also to serial
+                
+                // Update graphics console
+                if crate::gui::graphics::current_mode() == crate::gui::graphics::VgaMode::Graphics {
+                    crate::gui::console::update_input_buffer("");
+                    // Re-render desktop to show updated console
+                    crate::gui::desktop::render();
+                }
             }
             '\u{08}' | '\u{7f}' => {
                 use crate::serial_print;
@@ -124,12 +155,36 @@ impl Shell {
                     // Move cursor back, print space, move cursor back again (on both VGA and serial)
                     print!("\u{08} \u{08}");
                     serial_print!("\u{08} \u{08}"); // Also update serial output
+                    
+                    // Update graphics console and re-render
+                    if crate::gui::graphics::current_mode() == crate::gui::graphics::VgaMode::Graphics {
+                        crate::gui::console::update_input_buffer(&self.buffer);
+                        crate::gui::desktop::render();
+                    }
                 }
             }
             _ => {
+                use crate::serial_println;
+                serial_println!("[SHELL] Processing regular character: '{}' (U+{:04X})", c, c as u32);
+                
                 if self.buffer.len() < MAX_COMMAND_LEN {
                     self.buffer.push(c);
                     print!("{}", c);
+                    crate::serial_print!("{}", c); // Also to serial
+                    serial_println!("[SHELL] Buffer updated: '{}'", self.buffer);
+                    
+                    // Update graphics console input buffer and re-render on every keystroke
+                    if crate::gui::graphics::current_mode() == crate::gui::graphics::VgaMode::Graphics {
+                        serial_println!("[SHELL] Updating graphics console with: '{}'", self.buffer);
+                        crate::gui::console::update_input_buffer(&self.buffer);
+                        // Render on every keystroke so user sees what they're typing
+                        crate::gui::desktop::render();
+                        serial_println!("[SHELL] Console rendered");
+                    } else {
+                        serial_println!("[SHELL] Not in graphics mode, skipping console update");
+                    }
+                } else {
+                    serial_println!("[SHELL] Buffer full ({} chars), ignoring", MAX_COMMAND_LEN);
                 }
             }
         }
@@ -167,6 +222,17 @@ impl Shell {
                 shell_print!("  graphics  - Test graphics rendering (draw test pattern)");
                 shell_print!("  archimedes - Talk to Archimedes (Daily Ambition Agent)");
                 shell_print!("  desktop   - Show split-screen desktop (Conversation + Ambition)");
+                shell_print!("  mode      - Switch VGA mode (text/graphics) or show current mode");
+                shell_print!("  F1 or Esc - Toggle between text and graphics mode (keyboard shortcut)");
+                shell_print!("  F11       - Show fullscreen exit instructions");
+                shell_print!();
+                shell_print!("QEMU Fullscreen: Press Ctrl+Alt+F (or Ctrl+Alt+G) to exit");
+                shell_print!("                 Or Ctrl+A, X to quit QEMU");
+                shell_print!();
+                if crate::gui::graphics::current_mode() == crate::gui::graphics::VgaMode::Graphics {
+                    shell_print!("Note: In graphics mode, you can see and type commands");
+                    shell_print!("      in the console overlay at the bottom of the screen!");
+                }
             }
             "test" => {
                 shell_print!("Triggering Thomas to run tests...");
@@ -340,9 +406,38 @@ impl Shell {
                     shell_print!("  Feelings: {}", feeling_count);
                 }
             }
+            "mode" => {
+                let current = crate::gui::graphics::current_mode();
+                shell_print!("Current VGA mode: {:?}", current);
+                shell_print!("Press F1 to toggle, or use 'mode text' / 'mode graphics'");
+            }
             _ => {
-                // Check if it's a "breathe" command with argument
-                if cmd.starts_with("breathe ") {
+                // Check if it's a "mode" command with argument
+                if cmd.starts_with("mode ") {
+                    let mode_arg = cmd.strip_prefix("mode ").unwrap_or("").trim();
+                    match mode_arg {
+                        "text" => {
+                            unsafe {
+                                crate::gui::graphics::switch_to_text_mode();
+                            }
+                            shell_print!("Switched to TEXT mode");
+                            shell_print!("(VGA text buffer at 0xB8000)");
+                        }
+                        "graphics" | "gfx" => {
+                            unsafe {
+                                crate::gui::graphics::switch_to_graphics_mode();
+                            }
+                            shell_print!("Switched to GRAPHICS mode (Mode 13h)");
+                            shell_print!("(Framebuffer at 0xA0000, 320x200)");
+                        }
+                        _ => {
+                            shell_print!("Usage: mode [text|graphics]");
+                            shell_print!("  mode text      - Switch to text mode");
+                            shell_print!("  mode graphics  - Switch to graphics mode");
+                            shell_print!("  mode           - Show current mode");
+                        }
+                    }
+                } else if cmd.starts_with("breathe ") {
                     let ambition = cmd.strip_prefix("breathe ").unwrap_or("").trim();
                     if ambition.is_empty() {
                         shell_print!("Usage: breathe [your ambition text]");

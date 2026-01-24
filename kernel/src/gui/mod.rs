@@ -12,4 +12,6 @@
 
 pub mod graphics;
 pub mod desktop;
+pub mod console;
+pub mod fonts;
 
