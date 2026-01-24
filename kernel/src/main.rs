@@ -51,18 +51,11 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     serial_println!("[BOOT] Serial port initialized");
     serial_println!("[BOOT] VGA buffer at 0xb8000");
     
-    // Clear the screen and display our awakening message
+    // Clear the screen (but don't draw boot screen to text buffer)
+    // We'll draw it in graphics mode instead to avoid QEMU display issues
     vga_buffer::clear_screen();
     serial_println!("[BOOT] Screen cleared");
-    
-    // Display the boot screen
-    display_boot_screen();
-    serial_println!("[BOOT] Boot screen displayed");
-    
-    // Brief pause to show the glorious boot screen
-    serial_println!("[BOOT] Showing boot screen briefly...");
-    delay_ms(500); // Half a second - just enough to see it
-    serial_println!("[BOOT] Continuing initialization...");
+    serial_println!("[BOOT] Skipping text-mode boot screen - will render in graphics mode");
     
     // Initialize memory management
     serial_println!();
@@ -106,17 +99,26 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         serial_println!("[GRAPHICS] Double buffering unavailable (using single buffer)");
     }
     
-    // CRITICAL: Clear screen and ensure graphics mode is active
-    // The boot screen was drawn to text buffer - we need to clear graphics buffer
-    serial_println!("[GRAPHICS] Clearing graphics screen...");
+    // CRITICAL: Draw boot screen in graphics mode instead of text mode
+    // This ensures QEMU displays graphics from the start
+    serial_println!("[GRAPHICS] Drawing boot screen in graphics mode...");
     gui::graphics::with_graphics(|gfx| {
         gfx.clear(gui::graphics::Color::Black);
-        gfx.swap_buffers(); // Ensure cleared screen is displayed
+        // Draw boot screen text in graphics mode
+        gfx.draw_text(200, 200, "AGENTIC OPERATING SYSTEM", gui::graphics::Color::Cyan as u8);
+        gfx.draw_text(250, 220, "Genesis Awakening...", gui::graphics::Color::Cyan as u8);
+        gfx.draw_text(240, 250, "QuantumDynamX.com", gui::graphics::Color::Cyan as u8);
+        gfx.swap_buffers(); // Display immediately
     });
-    serial_println!("[GRAPHICS] Graphics screen cleared");
+    serial_println!("[GRAPHICS] Boot screen drawn in graphics mode");
     
-    // Draw initial test pattern
+    // Brief pause to show boot screen
+    delay_ms(500);
+    
+    // Clear and draw test pattern
+    serial_println!("[GRAPHICS] Clearing for desktop...");
     gui::graphics::with_graphics(|gfx| {
+        gfx.clear(gui::graphics::Color::Black);
         gfx.draw_test_pattern();
         gfx.swap_buffers();
     });
