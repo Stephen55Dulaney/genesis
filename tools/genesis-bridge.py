@@ -38,7 +38,7 @@ except ImportError:
 # Configuration
 QEMU_CMD = [
     "qemu-system-x86_64",
-    "-drive", "format=raw,file=/Users/stephendulaney/genesis/target/x86_64-unknown-none/debug/bootimage-genesis_kernel.bin",
+    "-drive", "format=raw,file=/Users/stephendulaney/genesis/target/x86_64-unknown-none/release/bootimage-genesis_kernel.bin",
     "-m", "32M",
     "-machine", "pc",
     "-cpu", "max",

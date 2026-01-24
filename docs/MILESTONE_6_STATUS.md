@@ -108,3 +108,4 @@ This will draw the test pattern on screen.
 
 **Next:** Test graphics rendering, then integrate with agents for agent-first boot sequence.
 
+

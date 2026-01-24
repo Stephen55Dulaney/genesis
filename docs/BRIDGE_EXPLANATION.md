@@ -78,3 +78,4 @@ Once we have graphics and windows:
 
 **TL;DR:** The Python bridge is the "translator" between Genesis and Gemini. Without it, Genesis can ask but nothing answers.
 
+

@@ -152,3 +152,4 @@ impl GraphicsContext {
 
 **TL;DR:** Bevy is great but requires std. We'll build a Bevy-inspired graphics system for bare-metal, optimized for agents.
 
+

@@ -1,0 +1,11 @@
+# Project Genesis - Cargo Configuration
+# Build settings for bare-metal x86_64 kernel
+
+# Only apply build-std for the no_std target
+[target.x86_64-unknown-none]
+rustflags = ["-C", "relocation-model=static"]
+
+[unstable]
+# Enable build-std for bare-metal targets only
+build-std = ["core", "compiler_builtins", "alloc"]
+build-std-features = ["compiler-builtins-mem"]

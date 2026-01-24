@@ -13,6 +13,7 @@
 extern crate alloc;  // Enable heap allocation types (Vec, String, Box)
 
 use alloc::boxed::Box;
+use alloc::string::String;
 use core::panic::PanicInfo;
 use bootloader::{BootInfo, entry_point};
 use x86_64::VirtAddr;

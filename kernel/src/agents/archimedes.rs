@@ -10,11 +10,13 @@
 //! - Organizes desktop around the ambition
 //! - Prepares workspace aligned with purpose
 
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use alloc::vec;
+use alloc::format;
 use super::{Agent, AgentId, AgentState, AgentContext};
 use super::message::{Message, MessageKind, FeedbackType, SystemEvent};
-use super::prompts::{character_ids, CertificationLevel};
+use super::prompts::character_ids;
 use super::prompts::library::with_library;
 use crate::serial_println;
 use crate::storage::filesystem;
@@ -62,7 +64,6 @@ impl Archimedes {
     
     /// Load today's ambition from storage
     fn load_today_ambition(&mut self) {
-        use alloc::format;
         
         // Try to load today's ambition file
         // Format: /storage/agents/archimedes/daily_ambitions/YYYY-MM-DD.txt
@@ -71,9 +72,9 @@ impl Archimedes {
         
         if let Ok(content) = filesystem::read_file_string(today_path) {
             serial_println!("[ARCHIMEDES] Loaded today's ambition from storage");
-            self.today_ambition = Some(content);
             // Parse commitments (simple parsing for now)
-            self.parse_ambition(&self.today_ambition.as_ref().unwrap());
+            self.parse_ambition(&content);
+            self.today_ambition = Some(content);
         } else {
             serial_println!("[ARCHIMEDES] No ambition file found - will create new one");
             // Create default ambition
@@ -130,7 +131,7 @@ impl Archimedes {
             if let Err(_) = filesystem::create_dir(folder) {
                 // Directory might already exist, that's okay
             }
-            self.workspace_folders.push(String::from(*folder));
+            self.workspace_folders.push((*folder).to_string());
         }
         
         serial_println!("[ARCHIMEDES] Workspace folders created: {} folders", folders.len());
@@ -299,7 +300,9 @@ impl Agent for Archimedes {
         
         serial_println!("[ARCHIMEDES] Desktop layout prepared around ambition");
     }
-    
+}
+
+impl Archimedes {
     /// Get today's ambition (for desktop rendering)
     pub fn get_ambition(&self) -> Option<&String> {
         self.today_ambition.as_ref()

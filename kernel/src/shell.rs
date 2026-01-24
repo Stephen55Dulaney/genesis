@@ -5,6 +5,7 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
+use alloc::vec;
 use crate::{print, println};
 use crate::agents::supervisor::Supervisor;
 use spin::{Mutex, Lazy};
@@ -219,8 +220,9 @@ impl Shell {
                 shell_print!();
                 
                 // Get current ambition for display
+                let default_ambition = String::from("Today, I want us to build something amazing together.");
                 let ambition = supervisor.get_ambition()
-                    .unwrap_or_else(|| String::from("Today, I want us to build something amazing together."));
+                    .unwrap_or(&default_ambition);
                 
                 // Create commitments from supervisor insights or defaults
                 let commitments = vec![

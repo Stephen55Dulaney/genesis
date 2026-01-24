@@ -10,6 +10,7 @@ extern crate alloc;
 use core::ptr;
 use spin::Mutex;
 use lazy_static::lazy_static;
+use x86_64::instructions::port::Port;
 
 /// VGA Mode 13h: 320x200, 256 colors
 pub const WIDTH: u32 = 320;
@@ -92,10 +93,8 @@ impl GraphicsContext {
     /// # Safety
     /// Direct hardware access - must be called during kernel init.
     pub unsafe fn init_mode_13h(&mut self) {
-        // Note: In a real bare-metal environment, we'd need to program VGA registers.
-        // However, many bootloaders and QEMU may already set up graphics mode.
-        // For now, we'll clear the framebuffer and assume Mode 13h is active.
-        // In a full implementation, we'd program all VGA registers here.
+        // Actually switch to VGA Mode 13h by programming hardware registers
+        switch_to_mode_13h();
         
         // Clear the framebuffer
         self.clear(Color::Black);
@@ -322,6 +321,169 @@ fn simple_char_bitmap(ch: char) -> [u8; 8] {
             // Default: simple box pattern for letters/numbers
             [0x7E, 0x81, 0x81, 0x81, 0x81, 0x81, 0x7E, 0x00]
         }
+    }
+}
+
+/// Switch VGA to Mode 13h (320x200, 256 colors)
+/// 
+/// This programs all the VGA registers needed for graphics mode.
+/// # Safety
+/// Direct hardware access - only call during initialization.
+unsafe fn switch_to_mode_13h() {
+    // VGA Mode 13h register values
+    // These are the standard values documented for Mode 13h
+    
+    // Miscellaneous Output Register
+    let mut misc_port: Port<u8> = Port::new(0x3C2);
+    misc_port.write(0x63);
+    
+    // Sequencer registers (0x3C4/0x3C5)
+    let mut seq_index: Port<u8> = Port::new(0x3C4);
+    let mut seq_data: Port<u8> = Port::new(0x3C5);
+    
+    // Sequencer values for Mode 13h
+    let seq_regs: [(u8, u8); 5] = [
+        (0x00, 0x03), // Reset register
+        (0x01, 0x01), // Clocking mode
+        (0x02, 0x0F), // Map mask
+        (0x03, 0x00), // Character map select
+        (0x04, 0x0E), // Memory mode
+    ];
+    
+    for (index, value) in seq_regs.iter() {
+        seq_index.write(*index);
+        seq_data.write(*value);
+    }
+    
+    // Unlock CRT Controller registers
+    let mut crtc_index: Port<u8> = Port::new(0x3D4);
+    let mut crtc_data: Port<u8> = Port::new(0x3D5);
+    
+    crtc_index.write(0x11);
+    let val = crtc_data.read();
+    crtc_data.write(val & 0x7F);
+    
+    // CRT Controller values for Mode 13h
+    let crtc_regs: [(u8, u8); 25] = [
+        (0x00, 0x5F), // Horizontal total
+        (0x01, 0x4F), // Horizontal display end
+        (0x02, 0x50), // Start horizontal blanking
+        (0x03, 0x82), // End horizontal blanking
+        (0x04, 0x54), // Start horizontal retrace
+        (0x05, 0x80), // End horizontal retrace
+        (0x06, 0xBF), // Vertical total
+        (0x07, 0x1F), // Overflow
+        (0x08, 0x00), // Preset row scan
+        (0x09, 0x41), // Maximum scan line
+        (0x0A, 0x00), // Cursor start
+        (0x0B, 0x00), // Cursor end
+        (0x0C, 0x00), // Start address high
+        (0x0D, 0x00), // Start address low
+        (0x0E, 0x00), // Cursor location high
+        (0x0F, 0x00), // Cursor location low
+        (0x10, 0x9C), // Vertical retrace start
+        (0x11, 0x8E), // Vertical retrace end (and lock bit)
+        (0x12, 0x8F), // Vertical display end
+        (0x13, 0x28), // Offset
+        (0x14, 0x40), // Underline location
+        (0x15, 0x96), // Start vertical blanking
+        (0x16, 0xB9), // End vertical blanking
+        (0x17, 0xA3), // Mode control
+        (0x18, 0xFF), // Line compare
+    ];
+    
+    for (index, value) in crtc_regs.iter() {
+        crtc_index.write(*index);
+        crtc_data.write(*value);
+    }
+    
+    // Graphics Controller registers (0x3CE/0x3CF)
+    let mut gc_index: Port<u8> = Port::new(0x3CE);
+    let mut gc_data: Port<u8> = Port::new(0x3CF);
+    
+    let gc_regs: [(u8, u8); 9] = [
+        (0x00, 0x00), // Set/reset
+        (0x01, 0x00), // Enable set/reset
+        (0x02, 0x00), // Color compare
+        (0x03, 0x00), // Data rotate
+        (0x04, 0x00), // Read map select
+        (0x05, 0x40), // Graphics mode
+        (0x06, 0x05), // Misc graphics
+        (0x07, 0x0F), // Color don't care
+        (0x08, 0xFF), // Bit mask
+    ];
+    
+    for (index, value) in gc_regs.iter() {
+        gc_index.write(*index);
+        gc_data.write(*value);
+    }
+    
+    // Attribute Controller registers (0x3C0)
+    let mut input_status: Port<u8> = Port::new(0x3DA);
+    let mut attr_port: Port<u8> = Port::new(0x3C0);
+    
+    // Reset attribute controller flip-flop by reading input status
+    let _ = input_status.read();
+    
+    // Attribute Controller palette (first 16 registers)
+    for i in 0u8..16 {
+        attr_port.write(i);
+        attr_port.write(i); // Identity mapping
+    }
+    
+    // Attribute Controller mode registers
+    attr_port.write(0x10); attr_port.write(0x41); // Mode control
+    attr_port.write(0x11); attr_port.write(0x00); // Overscan
+    attr_port.write(0x12); attr_port.write(0x0F); // Color plane enable
+    attr_port.write(0x13); attr_port.write(0x00); // Horizontal panning
+    attr_port.write(0x14); attr_port.write(0x00); // Color select
+    
+    // Enable video by setting bit 5
+    attr_port.write(0x20);
+    
+    // Set up a basic 256-color palette
+    setup_palette();
+}
+
+/// Set up the standard VGA 256-color palette
+unsafe fn setup_palette() {
+    let mut palette_index: Port<u8> = Port::new(0x3C8);
+    let mut palette_data: Port<u8> = Port::new(0x3C9);
+    
+    palette_index.write(0); // Start at color 0
+    
+    // Standard VGA colors (first 16)
+    let standard_colors: [(u8, u8, u8); 16] = [
+        (0x00, 0x00, 0x00), // 0: Black
+        (0x00, 0x00, 0x2A), // 1: Blue
+        (0x00, 0x2A, 0x00), // 2: Green
+        (0x00, 0x2A, 0x2A), // 3: Cyan
+        (0x2A, 0x00, 0x00), // 4: Red
+        (0x2A, 0x00, 0x2A), // 5: Magenta
+        (0x2A, 0x15, 0x00), // 6: Brown
+        (0x2A, 0x2A, 0x2A), // 7: Light Gray
+        (0x15, 0x15, 0x15), // 8: Dark Gray
+        (0x15, 0x15, 0x3F), // 9: Light Blue
+        (0x15, 0x3F, 0x15), // 10: Light Green
+        (0x15, 0x3F, 0x3F), // 11: Light Cyan
+        (0x3F, 0x15, 0x15), // 12: Light Red
+        (0x3F, 0x15, 0x3F), // 13: Pink
+        (0x3F, 0x3F, 0x15), // 14: Yellow
+        (0x3F, 0x3F, 0x3F), // 15: White
+    ];
+    
+    for (r, g, b) in standard_colors.iter() {
+        palette_data.write(*r);
+        palette_data.write(*g);
+        palette_data.write(*b);
+    }
+    
+    // Fill remaining colors with a grayscale ramp for simplicity
+    for i in 16u8..=255 {
+        let gray = (i / 4) as u8;
+        palette_data.write(gray);
+        palette_data.write(gray);
+        palette_data.write(gray);
     }
 }
 

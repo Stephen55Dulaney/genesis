@@ -8,7 +8,6 @@
 
 use alloc::string::String;
 use alloc::vec::Vec;
-use alloc::collections::BTreeMap;
 
 /// A zone on the desktop defined by an agent
 #[derive(Debug, Clone)]

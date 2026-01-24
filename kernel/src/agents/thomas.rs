@@ -248,14 +248,6 @@ impl Agent for Thomas {
             MessageKind::FirstBreath { agent_name, role } => {
                 serial_println!("[THOMAS] Agent {} took first breath as {}", agent_name, role);
             }
-            MessageKind::SystemEvent(SystemEvent::EnvironmentSetup) => {
-                serial_println!("[THOMAS] Environment setup triggered - organizing domain...");
-                // Thomas's environment setup: Health check and testing ground prep
-                serial_println!("[THOMAS] Preparing testing ground...");
-                serial_println!("[THOMAS] System health check complete");
-                serial_println!("[THOMAS] Domain organized!");
-            }
-            }
             MessageKind::Request { action, .. } => {
                 if action == "run_tests" {
                     serial_println!("[THOMAS] Received test request - running tests...");
