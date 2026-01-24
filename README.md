@@ -32,6 +32,38 @@ That ambition becomes the **heartbeat** of your entire system. Every agent recei
 
 ---
 
+## 🤖 Meet the Agents
+
+<div align="center">
+<table>
+<tr>
+<td align="center" width="33%">
+<img src="assets/characters/Archimedes.png" width="200" alt="Archimedes"/><br/>
+<b>Archimedes</b><br/>
+<i>The Co-Creator</i><br/>
+Daily Ambition Agent<br/>
+"What do WE want to accomplish?"
+</td>
+<td align="center" width="33%">
+<img src="assets/characters/sam.png" width="200" alt="Sam"/><br/>
+<b>Sam</b><br/>
+<i>The Supervisor</i><br/>
+Agent Orchestrator<br/>
+Coordinates all agents
+</td>
+<td align="center" width="33%">
+<img src="assets/characters/thomas.png" width="200" alt="Thomas"/><br/>
+<b>Thomas</b><br/>
+<i>The Guardian</i><br/>
+Testing & Security<br/>
+"Trust, but verify."
+</td>
+</tr>
+</table>
+</div>
+
+---
+
 ## 🚀 What We're Building
 
 **Genesis** is an operating system reimagined from the ground up in Rust:
