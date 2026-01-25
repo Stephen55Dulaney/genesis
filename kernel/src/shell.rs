@@ -12,8 +12,8 @@ use crate::agents::supervisor::Supervisor;
 use spin::{Mutex, Lazy};
 use crossbeam_queue::ArrayQueue;
 
-/// Print to both VGA and serial (so bridge can see it)
-/// Also adds to graphics console if in graphics mode
+/// Print to both VGA text mode and serial (so bridge can see it)
+/// Text mode is reliable and allocation-free for input/output
 macro_rules! shell_print {
     () => {
         {
@@ -23,19 +23,8 @@ macro_rules! shell_print {
     };
     ($($arg:tt)*) => {
         {
-            let output = alloc::format!($($arg)*);
-            println!("{}", output);
-            serial_println!("{}", output);
-            
-            // Add to graphics console if in graphics mode
-            if crate::gui::graphics::current_mode() == crate::gui::graphics::VgaMode::Graphics {
-                crate::gui::console::add_output_line(output);
-                // Re-render console only to avoid heap allocations
-                crate::gui::console::render_overlay(
-                    crate::gui::graphics::WIDTH,
-                    crate::gui::graphics::HEIGHT,
-                );
-            }
+            println!($($arg)*);
+            serial_println!($($arg)*);
         }
     };
 }
@@ -129,28 +118,12 @@ impl Shell {
                     shell_print!("{}", response);
                 } else {
                     // Normal command execution
-                    // Add command to console output
-                    if crate::gui::graphics::current_mode() == crate::gui::graphics::VgaMode::Graphics {
-                        let cmd_line = format!("{}{}", self.prompt, self.buffer);
-                        crate::gui::console::add_output_line(cmd_line);
-                    }
-                    
                     self.execute_command(supervisor);
                 }
                 
                 self.buffer.clear();
                 print!("{}", self.prompt);
                 crate::serial_print!("{}", self.prompt); // Also to serial
-                
-                // Update graphics console
-                if crate::gui::graphics::current_mode() == crate::gui::graphics::VgaMode::Graphics {
-                    crate::gui::console::update_input_buffer("");
-                    // Re-render console only to avoid heap allocations
-                    crate::gui::console::render_overlay(
-                        crate::gui::graphics::WIDTH,
-                        crate::gui::graphics::HEIGHT,
-                    );
-                }
             }
             '\u{08}' | '\u{7f}' => {
                 use crate::serial_print;
@@ -161,14 +134,7 @@ impl Shell {
                     print!("\u{08} \u{08}");
                     serial_print!("\u{08} \u{08}"); // Also update serial output
                     
-                    // Update graphics console and re-render
-                    if crate::gui::graphics::current_mode() == crate::gui::graphics::VgaMode::Graphics {
-                        crate::gui::console::update_input_buffer(&self.buffer);
-                        crate::gui::console::render_overlay(
-                            crate::gui::graphics::WIDTH,
-                            crate::gui::graphics::HEIGHT,
-                        );
-                    }
+                    // Text mode input - no graphics console needed
                 }
             }
             _ => {
@@ -177,15 +143,7 @@ impl Shell {
                     print!("{}", c);
                     crate::serial_print!("{}", c); // Also to serial
                     
-                    // Update graphics console input buffer and re-render on every keystroke
-                    if crate::gui::graphics::current_mode() == crate::gui::graphics::VgaMode::Graphics {
-                        crate::gui::console::update_input_buffer(&self.buffer);
-                        // Render console only so user sees what they're typing
-                        crate::gui::console::render_overlay(
-                            crate::gui::graphics::WIDTH,
-                            crate::gui::graphics::HEIGHT,
-                        );
-                    }
+                    // Text mode input - reliable, no allocations
                 }
             }
         }

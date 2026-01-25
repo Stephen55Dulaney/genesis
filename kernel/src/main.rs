@@ -77,18 +77,15 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     serial_println!("[MEMORY] Heap initialized");
     
     // Initialize graphics system (after heap for double buffering)
+    // Graphics is available but we start in TEXT MODE for reliable input
     serial_println!();
     serial_println!("[GRAPHICS] Initializing graphics system...");
     unsafe {
         gui::graphics::init();
+        // Switch back to text mode for reliable shell input (Option 2: Hybrid approach)
+        gui::graphics::switch_to_text_mode();
     }
-    serial_println!("[GRAPHICS] Graphics system initialized");
-    
-    // CRITICAL: Clear the VGA text buffer so QEMU doesn't show old boot screen
-    // After switching to graphics mode, we need to hide the text buffer
-    serial_println!("[GRAPHICS] Clearing VGA text buffer to hide boot screen...");
-    vga_buffer::clear_screen();
-    serial_println!("[GRAPHICS] Text buffer cleared");
+    serial_println!("[GRAPHICS] Graphics system initialized (text mode active for input)");
     
     // Enable double buffering if possible
     if let Some(_) = gui::graphics::with_graphics(|gfx| {
