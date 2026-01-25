@@ -76,54 +76,22 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     
     serial_println!("[MEMORY] Heap initialized");
     
-    // Initialize graphics system (after heap for double buffering)
-    // Graphics is available but we start in TEXT MODE for reliable input
+    // Stay in TEXT MODE for reliable shell input
+    // Graphics will be initialized on-demand (e.g., when 'desktop' command is run)
+    // This avoids VGA mode switching corruption issues
     serial_println!();
-    serial_println!("[GRAPHICS] Initializing graphics system...");
-    unsafe {
-        gui::graphics::init();
-        // Switch back to text mode for reliable shell input (Option 2: Hybrid approach)
-        gui::graphics::switch_to_text_mode();
-    }
-    serial_println!("[GRAPHICS] Graphics system initialized (text mode active for input)");
+    serial_println!("[GRAPHICS] Staying in text mode - graphics available on-demand");
     
-    // Enable double buffering if possible
-    if let Some(_) = gui::graphics::with_graphics(|gfx| {
-        gfx.enable_double_buffering().ok()
-    }) {
-        serial_println!("[GRAPHICS] Double buffering enabled");
-    } else {
-        serial_println!("[GRAPHICS] Double buffering unavailable (using single buffer)");
-    }
+    // Display boot screen in text mode (reliable, no mode switching)
+    display_boot_screen();
+    serial_println!("[BOOT] Boot screen displayed in text mode");
     
-    // CRITICAL: Draw boot screen in graphics mode instead of text mode
-    // This ensures QEMU displays graphics from the start
-    serial_println!("[GRAPHICS] Drawing boot screen in graphics mode...");
-    gui::graphics::with_graphics(|gfx| {
-        gfx.clear(gui::graphics::Color::Black);
-        // Draw boot screen text sized for 320x200 with 2x text scaling
-        gfx.draw_text(20, 20, "AGENTIC OPERATING SYSTEM", gui::graphics::Color::Cyan as u8);
-        gfx.draw_text(20, 50, "Genesis Awakening...", gui::graphics::Color::Cyan as u8);
-        gfx.draw_text(20, 80, "QuantumDynamX.com", gui::graphics::Color::Cyan as u8);
-        gfx.swap_buffers(); // Display immediately
-    });
-    serial_println!("[GRAPHICS] Boot screen drawn in graphics mode");
+    // Brief pause to see boot screen
+    delay_ms(1000);
     
-    // Pause to see boot screen (2 seconds)
-    delay_ms(2000);
-    
-    // Clear and draw test pattern
-    serial_println!("[GRAPHICS] Clearing for desktop...");
-    gui::graphics::with_graphics(|gfx| {
-        gfx.clear(gui::graphics::Color::Black);
-        gfx.draw_test_pattern();
-        gfx.swap_buffers();
-    });
-    serial_println!("[GRAPHICS] Test pattern drawn");
-    
-    // Brief pause to show graphics
-    serial_println!("[GRAPHICS] Graphics ready");
-    delay_ms(300); // Very brief pause - just enough to see graphics
+    // Clear screen for shell
+    vga_buffer::clear_screen();
+    serial_println!("[BOOT] Screen cleared - ready for shell");
     
     // Initialize interrupts (IDT + PIC)
     interrupts::init();
@@ -165,25 +133,10 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     // DESKTOP LAYOUT - Render organized desktop
     // =========================================================================
     
+    // Desktop and graphics console will be initialized on-demand when graphics mode is activated
+    // (e.g., when 'desktop' command is run)
     serial_println!();
-    serial_println!("[DESKTOP] Creating desktop layout from agent organization...");
-    
-    // Initialize desktop layout
-    use gui::desktop;
-    desktop::init(gui::graphics::WIDTH, gui::graphics::HEIGHT);
-    
-    // Initialize custom font system (Agent Alliance Academy font)
-    use gui::fonts;
-    let academy_font = fonts::create_academy_font();
-    fonts::set_font(academy_font);
-    serial_println!("[FONTS] Agent Alliance Academy font loaded");
-    serial_println!("[FONTS] Clean, professional, educational aesthetic");
-    
-    // Initialize graphics console overlay (for visible command input/output)
-    use gui::console;
-    console::init(gui::graphics::WIDTH, gui::graphics::HEIGHT);
-    console::add_output_line(String::from("=== GENESIS CONSOLE ==="));
-    console::add_output_line(String::from("Graphics Console Ready"));
+    serial_println!("[DESKTOP] Desktop available on-demand via 'desktop' command");
     console::add_output_line(String::from("Type commands here!"));
     serial_println!("[CONSOLE] Graphics console overlay initialized");
     serial_println!("[CONSOLE] Console should appear at bottom of graphics window");

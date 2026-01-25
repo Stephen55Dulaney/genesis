@@ -244,6 +244,25 @@ impl Shell {
                 shell_print!("  Right: Ambition Statement (Silent Archimedes)");
                 shell_print!();
                 
+                // Initialize graphics on-demand (lazy initialization)
+                unsafe {
+                    if crate::gui::graphics::current_mode() == crate::gui::graphics::VgaMode::Text {
+                        shell_print!("Initializing graphics mode...");
+                        crate::gui::graphics::init();
+                        
+                        // Initialize custom font system (Agent Alliance Academy font)
+                        use crate::gui::fonts;
+                        let academy_font = fonts::create_academy_font();
+                        fonts::set_font(academy_font);
+                        shell_print!("Agent Alliance Academy font loaded");
+                        
+                        // Initialize desktop and console
+                        use crate::gui::desktop;
+                        desktop::init(crate::gui::graphics::WIDTH, crate::gui::graphics::HEIGHT);
+                        shell_print!("Graphics mode initialized");
+                    }
+                }
+                
                 // Get current ambition for display
                 let default_ambition = String::from("Today, I want us to build something amazing together.");
                 let ambition = supervisor.get_ambition()
