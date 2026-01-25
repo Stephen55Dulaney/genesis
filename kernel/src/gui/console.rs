@@ -11,6 +11,8 @@ use lazy_static::lazy_static;
 
 /// Maximum number of lines in console output history
 const MAX_OUTPUT_LINES: usize = 10;
+/// Maximum input length (should match shell command length)
+const MAX_INPUT_LEN: usize = 128;
 
 /// Console state for graphics mode overlay
 pub struct GraphicsConsole {
@@ -30,7 +32,7 @@ impl GraphicsConsole {
     /// Create a new graphics console
     pub fn new(height: u32) -> Self {
         GraphicsConsole {
-            input_buffer: String::new(),
+            input_buffer: String::with_capacity(MAX_INPUT_LEN),
             output_lines: Vec::new(),
             prompt: String::from("genesis> "),
             height,
@@ -55,7 +57,8 @@ impl GraphicsConsole {
 
     /// Update the input buffer (what user is typing)
     pub fn set_input_buffer(&mut self, buffer: &str) {
-        self.input_buffer = String::from(buffer);
+        self.input_buffer.clear();
+        self.input_buffer.push_str(buffer);
     }
 
     /// Add a line to output history
@@ -92,6 +95,11 @@ impl GraphicsConsole {
     /// This should be called from within a graphics::with_graphics closure
     /// to avoid nested mutex locking.
     pub fn render_to_graphics(&self, gfx: &mut super::graphics::GraphicsContext, screen_width: u32, screen_height: u32) {
+        let font = super::fonts::get_font();
+        let char_w = font.char_width * super::graphics::TEXT_SCALE;
+        let char_h = font.char_height * super::graphics::TEXT_SCALE;
+        let line_height = char_h + 2;
+
         // Console is at the bottom of the screen
         let console_y = screen_height - self.height;
         
@@ -105,11 +113,10 @@ impl GraphicsConsole {
         gfx.draw_rect_outline(0, console_y, screen_width, self.height, 15); // White border
         
         // Render output lines (above input line)
-        let mut y_offset = console_y + 5;
-        let line_height = 8;
+        let mut y_offset = console_y + 6;
         
         for line in self.output_lines.iter().rev().take(MAX_OUTPUT_LINES) {
-            if y_offset + line_height > console_y + self.height - 12 {
+            if y_offset + line_height > console_y + self.height - (char_h + 6) {
                 break; // Don't overlap input line
             }
             gfx.draw_text(5, y_offset, line, 15); // White text
@@ -117,22 +124,46 @@ impl GraphicsConsole {
         }
         
         // Draw input line at bottom
-        let input_y = console_y + self.height - 10;
-        let input_text = format!("{}{}", self.prompt, self.input_buffer);
-        
-        // Truncate input text if too long to fit on screen
-        let max_chars = (screen_width / 8).saturating_sub(2); // Leave room for cursor
-        let display_text = if input_text.len() > max_chars as usize {
-            &input_text[input_text.len().saturating_sub(max_chars as usize)..]
-        } else {
-            &input_text
+        let input_y = console_y + self.height - (char_h + 4);
+        let prompt = self.prompt.as_str();
+        let input = self.input_buffer.as_str();
+        let max_chars = (screen_width / char_w.max(1)).saturating_sub(2) as usize; // Leave room for cursor
+        let total_len = prompt.len() + input.len();
+        let mut prompt_part = prompt;
+        let mut input_part = input;
+
+        // Clamp slicing to UTF-8 boundaries (ASCII prompt/input expected).
+        let clamp_boundary = |s: &str, mut idx: usize| -> usize {
+            if idx > s.len() {
+                idx = s.len();
+            }
+            while idx < s.len() && !s.is_char_boundary(idx) {
+                idx += 1;
+            }
+            idx
         };
-        
-        // Draw prompt + input (bright cyan for visibility)
-        gfx.draw_text(5, input_y, display_text, 11); // Light cyan
-        
+
+        if total_len > max_chars {
+            let mut skip = total_len - max_chars;
+            if skip >= prompt.len() {
+                skip -= prompt.len();
+                let start = clamp_boundary(input, skip);
+                prompt_part = "";
+                input_part = &input[start..];
+            } else {
+                let start = clamp_boundary(prompt, skip);
+                prompt_part = &prompt[start..];
+                input_part = input;
+            }
+        }
+
+        // Draw prompt + input separately (avoid alloc)
+        gfx.draw_text(5, input_y, prompt_part, 11); // Light cyan
+        let input_x = 5 + (prompt_part.len() as u32 * char_w);
+        gfx.draw_text(input_x, input_y, input_part, 11); // Light cyan
+
         // Draw cursor (blinking would require timer, for now just show underscore)
-        let cursor_x = 5 + (display_text.len() as u32 * 8); // 8 pixels per char
+        let cursor_x = 5 + ((prompt_part.len() + input_part.len()) as u32 * char_w);
         gfx.draw_text(cursor_x, input_y, "_", 15); // White cursor
     }
 }
@@ -144,7 +175,7 @@ lazy_static! {
 
 /// Initialize graphics console
 pub fn init(_screen_width: u32, screen_height: u32) {
-    let console_height = 120; // 120 pixels tall (increased for 640x480 resolution)
+    let console_height = 80; // 80 pixels tall (fits 320x200 with 2x text)
     let mut console = GraphicsConsole::new(console_height);
     console.set_y_position(screen_height - console_height);
     *GRAPHICS_CONSOLE.lock() = Some(console);
@@ -152,15 +183,12 @@ pub fn init(_screen_width: u32, screen_height: u32) {
 
 /// Update console input buffer
 pub fn update_input_buffer(buffer: &str) {
-    use crate::serial_println;
-    serial_println!("[CONSOLE] update_input_buffer called with: '{}'", buffer);
-    
     if let Some(ref mut console) = GRAPHICS_CONSOLE.lock().as_mut() {
         console.set_input_buffer(buffer);
-        serial_println!("[CONSOLE] Input buffer updated successfully");
-    } else {
-        serial_println!("[CONSOLE] ERROR: Graphics console not initialized!");
     }
+
+    // Visual echo: render immediately so keystrokes appear in GUI.
+    render_overlay(super::graphics::WIDTH, super::graphics::HEIGHT);
 }
 
 /// Add output line to console
@@ -191,6 +219,15 @@ fn render_internal(screen_width: u32, screen_height: u32) {
 /// Render the console overlay (public wrapper)
 pub fn render(screen_width: u32, screen_height: u32) {
     render_internal(screen_width, screen_height);
+}
+
+/// Render only the console overlay and swap buffers (no full desktop redraw)
+pub fn render_overlay(screen_width: u32, screen_height: u32) {
+    use super::graphics;
+    graphics::with_graphics(|gfx| {
+        render_to_graphics(gfx, screen_width, screen_height);
+        gfx.swap_buffers();
+    });
 }
 
 /// Render console directly to graphics context (for use within graphics::with_graphics)

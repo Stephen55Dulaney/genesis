@@ -1,7 +1,7 @@
 //! VGA Graphics Mode Driver
 //!
 //! Provides pixel-level graphics for Genesis OS.
-//! Uses VGA Mode 12h: 640x480 pixels, 16 colors (4x more pixels than Mode 13h!)
+//! Uses VGA Mode 13h: 320x200 pixels, 256 colors.
 //!
 //! Inspired by Bevy's simple API, adapted for bare-metal.
 
@@ -10,15 +10,17 @@ extern crate alloc;
 use core::ptr;
 use spin::Mutex;
 use lazy_static::lazy_static;
-use x86_64::instructions::port::Port;
 
 // Import serial macros for debug output
 use crate::serial_println;
 
-/// VGA Mode 12h: 640x480, 16 colors
-pub const WIDTH: u32 = 640;
-pub const HEIGHT: u32 = 480;
+/// VGA Mode 13h: 320x200, 256 colors
+pub const WIDTH: u32 = 320;
+pub const HEIGHT: u32 = 200;
 pub const FRAMEBUFFER_ADDR: usize = 0xA0000;
+
+/// Text rendering scale factor (2x for readability)
+pub const TEXT_SCALE: u32 = 2;
 
 /// Color palette (256 colors)
 /// Mode 13h uses a palette - we'll use standard VGA colors
@@ -60,6 +62,10 @@ pub struct GraphicsContext {
 }
 
 impl GraphicsContext {
+    /// Total framebuffer size in bytes for Mode 13h (linear).
+    fn buffer_len_bytes(&self) -> usize {
+        (self.width * self.height) as usize
+    }
     /// Create a new graphics context
     /// 
     /// # Safety
@@ -106,12 +112,14 @@ impl GraphicsContext {
         self.draw_test_pattern();
     }
     
-    /// Initialize VGA Mode 13h (legacy - kept for compatibility)
+    /// Initialize VGA Mode 13h
     /// 
     /// # Safety
     /// Direct hardware access - must be called during kernel init.
     pub unsafe fn init_mode_13h(&mut self) {
-        self.init_mode_12h(); // Use Mode 12h instead
+        switch_to_mode_13h();
+        self.clear(Color::Black);
+        self.draw_test_pattern();
     }
     
     /// Draw a test pattern to verify graphics is working
@@ -119,77 +127,40 @@ impl GraphicsContext {
         // Clear screen
         self.clear(Color::Black);
         
-        // Draw colored rectangles in corners (larger for 640x480)
-        let corner_size = 100u32;
+        // Draw colored rectangles in corners (fit 320x200)
+        let corner_size = 40u32;
         self.draw_rect(0, 0, corner_size, corner_size, Color::Red as u8);
         self.draw_rect(self.width - corner_size, 0, corner_size, corner_size, Color::Green as u8);
         self.draw_rect(0, self.height - corner_size, corner_size, corner_size, Color::Blue as u8);
         self.draw_rect(self.width - corner_size, self.height - corner_size, corner_size, corner_size, Color::Yellow as u8);
         
         // Draw a centered rectangle
-        let center_x = self.width / 2 - 80;
-        let center_y = self.height / 2 - 40;
-        self.draw_rect_outline(center_x, center_y, 160, 80, Color::Cyan as u8);
+        let center_x = self.width / 2 - 40;
+        let center_y = self.height / 2 - 20;
+        self.draw_rect_outline(center_x, center_y, 80, 40, Color::Cyan as u8);
         
         // Draw text (larger spacing for readability)
-        self.draw_text(20, 120, "GENESIS", Color::White as u8);
-        self.draw_text(20, 140, "Mode 12h: 640x480 Graphics", Color::LightCyan as u8);
-        self.draw_text(20, 160, "4x More Pixels - Much Clearer!", Color::LightGreen as u8);
+        self.draw_text(10, 120, "GENESIS", Color::White as u8);
+        self.draw_text(10, 140, "Mode 13h: 320x200", Color::LightCyan as u8);
+        self.draw_text(10, 160, "2x Text Scaling", Color::LightGreen as u8);
     }
     
     /// Draw a single pixel
     /// 
-    /// For Mode 12h (640x480), uses planar graphics mode:
-    /// - Each pixel is 4 bits (one per color plane)
-    /// - Memory organized in 4 planes
-    /// - Each byte represents 8 pixels horizontally
+    /// Mode 13h uses linear framebuffer: one byte per pixel
     pub fn draw_pixel(&mut self, x: u32, y: u32, color: u8) {
         if x >= self.width || y >= self.height {
             return;
         }
-        
-        // Mode 12h uses planar graphics (4 color planes)
-        // Calculate byte offset: (y * bytes_per_row) + (x / 8)
-        // bytes_per_row = width / 8 = 640 / 8 = 80
-        let bytes_per_row = self.width / 8;
-        let byte_offset = (y * bytes_per_row + (x / 8)) as usize;
-        let bit_position = 7 - (x % 8); // Bit 7 is leftmost pixel
-        let bit_mask = 1u8 << bit_position;
-        
+
+        let offset = (y * self.width + x) as usize;
         unsafe {
-            use x86_64::instructions::port::Port;
-            
             let buffer = if self.back_buffer.is_null() {
                 self.front_buffer
             } else {
                 self.back_buffer
             };
-            
-            // Graphics Controller ports
-            let mut gc_index: Port<u8> = Port::new(0x3CE);
-            let mut gc_data: Port<u8> = Port::new(0x3CF);
-            
-            // Set bit mask to write only this pixel
-            gc_index.write(0x08);
-            gc_data.write(bit_mask);
-            
-            // Use set/reset to write color to all planes
-            gc_index.write(0x00); // Set/reset register
-            gc_data.write(color & 0x0F); // Color value (4 bits)
-            
-            gc_index.write(0x01); // Enable set/reset
-            gc_data.write(0x0F); // Enable for all 4 planes
-            
-            // Read-modify-write cycle (required for planar mode)
-            let _current_byte = *buffer.add(byte_offset);
-            *buffer.add(byte_offset) = 0xFF; // Write all bits (set/reset handles color)
-            
-            // Restore graphics controller state
-            gc_index.write(0x01);
-            gc_data.write(0x00); // Disable set/reset
-            
-            gc_index.write(0x08);
-            gc_data.write(0xFF); // Reset bit mask
+            *buffer.add(offset) = color;
         }
     }
     
@@ -224,45 +195,13 @@ impl GraphicsContext {
     /// Clear the screen with a color
     pub fn clear(&mut self, color: Color) {
         self.clear_color = color as u8;
-        let color_value = color as u8 & 0x0F; // Mode 12h uses 4-bit colors
-        
+        let buffer = if self.back_buffer.is_null() {
+            self.front_buffer
+        } else {
+            self.back_buffer
+        };
         unsafe {
-            use x86_64::instructions::port::Port;
-            
-            let buffer = if self.back_buffer.is_null() {
-                self.front_buffer
-            } else {
-                self.back_buffer
-            };
-            
-            // For Mode 12h planar mode, clear using set/reset
-            let mut gc_index: Port<u8> = Port::new(0x3CE);
-            let mut gc_data: Port<u8> = Port::new(0x3CF);
-            
-            // Set/reset value = clear color
-            gc_index.write(0x00);
-            gc_data.write(color_value);
-            
-            // Enable set/reset for all planes
-            gc_index.write(0x01);
-            gc_data.write(0x0F);
-            
-            // Set bit mask to write all bits
-            gc_index.write(0x08);
-            gc_data.write(0xFF);
-            
-            // Clear all bytes (each byte = 8 pixels)
-            let bytes_per_row = self.width / 8; // 640 / 8 = 80
-            let total_bytes = (bytes_per_row * self.height) as usize;
-            
-            for i in 0..total_bytes {
-                let _ = *buffer.add(i); // Read (required for write mode)
-                *buffer.add(i) = 0xFF; // Write (set/reset applies color)
-            }
-            
-            // Restore graphics controller
-            gc_index.write(0x01);
-            gc_data.write(0x00); // Disable set/reset
+            ptr::write_bytes(buffer, self.clear_color, self.buffer_len_bytes());
         }
     }
     
@@ -276,7 +215,7 @@ impl GraphicsContext {
                 ptr::copy_nonoverlapping(
                     self.back_buffer,
                     self.front_buffer,
-                    (self.width * self.height) as usize,
+                    self.buffer_len_bytes(),
                 );
             }
         }
@@ -289,7 +228,7 @@ impl GraphicsContext {
     pub fn enable_double_buffering(&mut self) -> Result<(), &'static str> {
         use alloc::alloc::{alloc, Layout};
         
-        let size = (self.width * self.height) as usize;
+        let size = self.buffer_len_bytes();
         let layout = Layout::from_size_align(size, 1)
             .map_err(|_| "Invalid layout")?;
         
@@ -320,9 +259,9 @@ impl GraphicsContext {
     pub fn draw_text(&mut self, x: u32, y: u32, text: &str, color: u8) {
         use super::fonts;
         let font = fonts::get_font();
-        let char_width = font.char_width;
-        let spacing = font.spacing;
-        let char_height = font.char_height;
+        let char_width = font.char_width * TEXT_SCALE;
+        let spacing = font.spacing * TEXT_SCALE;
+        let char_height = font.char_height * TEXT_SCALE;
         
         let mut cursor_x = x;
         let mut cursor_y = y;
@@ -331,7 +270,7 @@ impl GraphicsContext {
             match ch {
                 '\n' => {
                     cursor_x = x;
-                    cursor_y += char_height + 3; // Line height with extra spacing for readability
+                    cursor_y += char_height + 4; // Line height with extra spacing for readability
                 }
                 '\r' => {
                     cursor_x = x;
@@ -347,7 +286,7 @@ impl GraphicsContext {
                     // Wrap if we go off screen
                     if cursor_x + char_width > self.width {
                         cursor_x = x;
-                        cursor_y += char_height + 3; // Extra line spacing for readability
+                        cursor_y += char_height + 4; // Extra line spacing for readability
                     }
                 }
             }
@@ -361,20 +300,29 @@ impl GraphicsContext {
         let font_data = get_char_bitmap(ch);
         
         for (row, &byte) in font_data.iter().enumerate() {
-            let py = y + row as u32;
+            let py = y + (row as u32 * TEXT_SCALE);
             if py >= self.height {
                 break;
             }
             
             for col in 0..8 {
-                let px = x + col;
+                let px = x + (col * TEXT_SCALE);
                 if px >= self.width {
                     break;
                 }
                 
                 // Check if bit is set (bit 7 is leftmost pixel)
                 if (byte >> (7 - col)) & 1 != 0 {
-                    self.draw_pixel(px, py, color);
+                    // Draw scaled pixel block (2x2)
+                    for dy in 0..TEXT_SCALE {
+                        for dx in 0..TEXT_SCALE {
+                            let sx = px + dx;
+                            let sy = py + dy;
+                            if sx < self.width && sy < self.height {
+                                self.draw_pixel(sx, sy, color);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -561,14 +509,120 @@ unsafe fn switch_to_mode_12h() {
     serial_println!("[VGA] STEP 7: SUCCESS! Graphics framebuffer cleared - QEMU should show graphics!");
 }
 
-/// Switch VGA to Mode 13h (320x200, 256 colors) - Legacy function
-/// 
-/// This programs all the VGA registers needed for graphics mode.
-/// # Safety
-/// Direct hardware access - only call during initialization.
+    /// Switch VGA to Mode 13h (320x200, 256 colors)
+    /// 
+    /// This programs all the VGA registers needed for graphics mode.
+    /// # Safety
+    /// Direct hardware access - only call during initialization.
 unsafe fn switch_to_mode_13h() {
-    // Redirect to Mode 12h for better clarity
-    switch_to_mode_12h();
+    use x86_64::instructions::port::Port;
+    use crate::serial_println;
+    
+    serial_println!("[VGA] Switching to Mode 13h (320x200, 256 colors)...");
+    
+    // Miscellaneous Output Register
+    let mut misc_port: Port<u8> = Port::new(0x3C2);
+    misc_port.write(0x63);
+    
+    // Sequencer registers (0x3C4/0x3C5)
+    let mut seq_index: Port<u8> = Port::new(0x3C4);
+    let mut seq_data: Port<u8> = Port::new(0x3C5);
+    
+    let seq_regs: [(u8, u8); 5] = [
+        (0x00, 0x03), // Reset register
+        (0x01, 0x01), // Clocking mode
+        (0x02, 0x0F), // Map mask
+        (0x03, 0x00), // Character map select
+        (0x04, 0x0E), // Memory mode
+    ];
+    
+    for (index, value) in seq_regs.iter() {
+        seq_index.write(*index);
+        seq_data.write(*value);
+    }
+    
+    // Unlock CRT Controller registers
+    let mut crtc_index: Port<u8> = Port::new(0x3D4);
+    let mut crtc_data: Port<u8> = Port::new(0x3D5);
+    
+    crtc_index.write(0x11);
+    let val = crtc_data.read();
+    crtc_data.write(val & 0x7F);
+    
+    let crtc_regs: [(u8, u8); 25] = [
+        (0x00, 0x5F), // Horizontal total
+        (0x01, 0x4F), // Horizontal display end
+        (0x02, 0x50), // Start horizontal blanking
+        (0x03, 0x82), // End horizontal blanking
+        (0x04, 0x54), // Start horizontal retrace
+        (0x05, 0x80), // End horizontal retrace
+        (0x06, 0xBF), // Vertical total
+        (0x07, 0x1F), // Overflow
+        (0x08, 0x00), // Preset row scan
+        (0x09, 0x41), // Maximum scan line
+        (0x0A, 0x00), // Cursor start
+        (0x0B, 0x00), // Cursor end
+        (0x0C, 0x00), // Start address high
+        (0x0D, 0x00), // Start address low
+        (0x0E, 0x00), // Cursor location high
+        (0x0F, 0x00), // Cursor location low
+        (0x10, 0x9C), // Vertical retrace start
+        (0x11, 0x8E), // Vertical retrace end
+        (0x12, 0x8F), // Vertical display end
+        (0x13, 0x28), // Offset
+        (0x14, 0x40), // Underline location
+        (0x15, 0x96), // Start vertical blanking
+        (0x16, 0xB9), // End vertical blanking
+        (0x17, 0xA3), // Mode control
+        (0x18, 0xFF), // Line compare
+    ];
+    
+    for (index, value) in crtc_regs.iter() {
+        crtc_index.write(*index);
+        crtc_data.write(*value);
+    }
+    
+    // Graphics Controller registers (0x3CE/0x3CF)
+    let mut gc_index: Port<u8> = Port::new(0x3CE);
+    let mut gc_data: Port<u8> = Port::new(0x3CF);
+    
+    let gc_regs: [(u8, u8); 9] = [
+        (0x00, 0x00), // Set/reset
+        (0x01, 0x00), // Enable set/reset
+        (0x02, 0x00), // Color compare
+        (0x03, 0x00), // Data rotate
+        (0x04, 0x00), // Read map select
+        (0x05, 0x40), // Graphics mode
+        (0x06, 0x05), // Misc graphics
+        (0x07, 0x0F), // Color don't care
+        (0x08, 0xFF), // Bit mask
+    ];
+    
+    for (index, value) in gc_regs.iter() {
+        gc_index.write(*index);
+        gc_data.write(*value);
+    }
+    
+    // Attribute Controller registers (0x3C0)
+    let mut input_status: Port<u8> = Port::new(0x3DA);
+    let mut attr_port: Port<u8> = Port::new(0x3C0);
+    
+    let _ = input_status.read();
+    
+    for i in 0u8..16 {
+        attr_port.write(i);
+        attr_port.write(i);
+    }
+    
+    attr_port.write(0x10); attr_port.write(0x41); // Mode control
+    attr_port.write(0x11); attr_port.write(0x00); // Overscan
+    attr_port.write(0x12); attr_port.write(0x0F); // Color plane enable
+    attr_port.write(0x13); attr_port.write(0x00); // Horizontal panning
+    attr_port.write(0x14); attr_port.write(0x00); // Color select
+    
+    attr_port.write(0x20); // Enable video
+    
+    setup_palette();
 }
 
 /// Set up the standard VGA 16-color palette for Mode 12h
@@ -609,9 +663,48 @@ unsafe fn setup_palette_16color() {
     serial_println!("[PALETTE] 16-color palette configured");
 }
 
-/// Set up the standard VGA 256-color palette (legacy - for Mode 13h)
+/// Set up the standard VGA 256-color palette (Mode 13h)
 unsafe fn setup_palette() {
-    setup_palette_16color(); // Use 16-color palette for Mode 12h
+    use x86_64::instructions::port::Port;
+    
+    let mut palette_index: Port<u8> = Port::new(0x3C8);
+    let mut palette_data: Port<u8> = Port::new(0x3C9);
+    
+    palette_index.write(0); // Start at color 0
+    
+    // Standard VGA colors (first 16)
+    let standard_colors: [(u8, u8, u8); 16] = [
+        (0x00, 0x00, 0x00), // 0: Black
+        (0x00, 0x00, 0x2A), // 1: Blue
+        (0x00, 0x2A, 0x00), // 2: Green
+        (0x00, 0x2A, 0x2A), // 3: Cyan
+        (0x2A, 0x00, 0x00), // 4: Red
+        (0x2A, 0x00, 0x2A), // 5: Magenta
+        (0x2A, 0x15, 0x00), // 6: Brown
+        (0x2A, 0x2A, 0x2A), // 7: Light Gray
+        (0x15, 0x15, 0x15), // 8: Dark Gray
+        (0x15, 0x15, 0x3F), // 9: Light Blue
+        (0x15, 0x3F, 0x15), // 10: Light Green
+        (0x15, 0x3F, 0x3F), // 11: Light Cyan
+        (0x3F, 0x15, 0x15), // 12: Light Red
+        (0x3F, 0x15, 0x3F), // 13: Pink
+        (0x3F, 0x3F, 0x15), // 14: Yellow
+        (0x3F, 0x3F, 0x3F), // 15: White
+    ];
+    
+    for (r, g, b) in standard_colors.iter() {
+        palette_data.write(*r);
+        palette_data.write(*g);
+        palette_data.write(*b);
+    }
+    
+    // Fill remaining colors with a grayscale ramp
+    for i in 16u8..=255 {
+        let gray = (i / 4) as u8;
+        palette_data.write(gray);
+        palette_data.write(gray);
+        palette_data.write(gray);
+    }
 }
 
 // Safety: GraphicsContext is safe to share and send across threads because:
@@ -648,8 +741,8 @@ pub unsafe fn init() {
     serial_println!("[GRAPHICS] Creating graphics context...");
     let mut graphics = GraphicsContext::new();
     
-    serial_println!("[GRAPHICS] Initializing Mode 12h...");
-    graphics.init_mode_12h(); // Use Mode 12h (640x480) for better clarity
+    serial_println!("[GRAPHICS] Initializing Mode 13h...");
+    graphics.init_mode_13h(); // Mode 13h (320x200) with 2x text scaling
     
     serial_println!("[GRAPHICS] Storing graphics context...");
     *GRAPHICS.lock() = Some(graphics);
@@ -787,10 +880,10 @@ pub unsafe fn toggle_mode() {
             // Ensure graphics context exists
             if GRAPHICS.lock().is_none() {
                 let mut graphics = GraphicsContext::new();
-                graphics.init_mode_12h();
+                graphics.init_mode_13h();
                 *GRAPHICS.lock() = Some(graphics);
             } else if let Some(ref mut gfx) = GRAPHICS.lock().as_mut() {
-                gfx.init_mode_12h();
+                gfx.init_mode_13h();
             }
             // Update mode state
             *CURRENT_MODE.lock() = VgaMode::Graphics;
@@ -811,10 +904,10 @@ pub unsafe fn switch_to_graphics_mode() {
     // Ensure graphics context exists
     if GRAPHICS.lock().is_none() {
         let mut graphics = GraphicsContext::new();
-        graphics.init_mode_12h();
+        graphics.init_mode_13h();
         *GRAPHICS.lock() = Some(graphics);
     } else if let Some(ref mut gfx) = GRAPHICS.lock().as_mut() {
-        gfx.init_mode_12h();
+        gfx.init_mode_13h();
     }
     // Update mode state
     *CURRENT_MODE.lock() = VgaMode::Graphics;

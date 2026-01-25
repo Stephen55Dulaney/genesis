@@ -13,7 +13,7 @@
 //! 0x0000_4444_0000 ─────────────────────
 //!                   │                   │
 //!                   │   KERNEL HEAP     │  ← We allocate here!
-//!                   │   (100 KiB)       │
+//!                   │   (512 KiB)       │
 //!                   │                   │
 //! 0x0000_4444_0000 + HEAP_SIZE ─────────
 //!                   │ (rest of memory)  │
@@ -40,8 +40,8 @@ use crate::serial_println;
 /// We pick an address that's unlikely to conflict with other mappings
 pub const HEAP_START: usize = 0x_4444_4444_0000;
 
-/// Size of the kernel heap (100 KiB to start - we can grow later)
-pub const HEAP_SIZE: usize = 100 * 1024;
+/// Size of the kernel heap (512 KiB to start - we can grow later)
+pub const HEAP_SIZE: usize = 512 * 1024;
 
 /// The global allocator instance
 /// 

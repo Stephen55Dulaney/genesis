@@ -104,15 +104,15 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     serial_println!("[GRAPHICS] Drawing boot screen in graphics mode...");
     gui::graphics::with_graphics(|gfx| {
         gfx.clear(gui::graphics::Color::Black);
-        // Draw boot screen text in graphics mode (centered)
-        gfx.draw_text(180, 200, "AGENTIC OPERATING SYSTEM", gui::graphics::Color::Cyan as u8);
-        gfx.draw_text(250, 230, "Genesis Awakening...", gui::graphics::Color::Cyan as u8);
-        gfx.draw_text(220, 260, "QuantumDynamX.com", gui::graphics::Color::Cyan as u8);
+        // Draw boot screen text sized for 320x200 with 2x text scaling
+        gfx.draw_text(20, 20, "AGENTIC OPERATING SYSTEM", gui::graphics::Color::Cyan as u8);
+        gfx.draw_text(20, 50, "Genesis Awakening...", gui::graphics::Color::Cyan as u8);
+        gfx.draw_text(20, 80, "QuantumDynamX.com", gui::graphics::Color::Cyan as u8);
         gfx.swap_buffers(); // Display immediately
     });
     serial_println!("[GRAPHICS] Boot screen drawn in graphics mode");
     
-    // Longer pause to see boot screen (2 seconds)
+    // Pause to see boot screen (2 seconds)
     delay_ms(2000);
     
     // Clear and draw test pattern

@@ -30,8 +30,11 @@ macro_rules! shell_print {
             // Add to graphics console if in graphics mode
             if crate::gui::graphics::current_mode() == crate::gui::graphics::VgaMode::Graphics {
                 crate::gui::console::add_output_line(output);
-                // Re-render desktop to show updated console
-                crate::gui::desktop::render();
+                // Re-render console only to avoid heap allocations
+                crate::gui::console::render_overlay(
+                    crate::gui::graphics::WIDTH,
+                    crate::gui::graphics::HEIGHT,
+                );
             }
         }
     };
@@ -114,7 +117,6 @@ impl Shell {
         match c {
             '\n' | '\r' => {
                 use crate::serial_println;
-                use crate::serial_print;
                 
                 println!(); // New line on screen
                 serial_println!(); // Also to serial
@@ -143,8 +145,11 @@ impl Shell {
                 // Update graphics console
                 if crate::gui::graphics::current_mode() == crate::gui::graphics::VgaMode::Graphics {
                     crate::gui::console::update_input_buffer("");
-                    // Re-render desktop to show updated console
-                    crate::gui::desktop::render();
+                    // Re-render console only to avoid heap allocations
+                    crate::gui::console::render_overlay(
+                        crate::gui::graphics::WIDTH,
+                        crate::gui::graphics::HEIGHT,
+                    );
                 }
             }
             '\u{08}' | '\u{7f}' => {
@@ -159,32 +164,28 @@ impl Shell {
                     // Update graphics console and re-render
                     if crate::gui::graphics::current_mode() == crate::gui::graphics::VgaMode::Graphics {
                         crate::gui::console::update_input_buffer(&self.buffer);
-                        crate::gui::desktop::render();
+                        crate::gui::console::render_overlay(
+                            crate::gui::graphics::WIDTH,
+                            crate::gui::graphics::HEIGHT,
+                        );
                     }
                 }
             }
             _ => {
-                use crate::serial_println;
-                serial_println!("[SHELL] Processing regular character: '{}' (U+{:04X})", c, c as u32);
-                
                 if self.buffer.len() < MAX_COMMAND_LEN {
                     self.buffer.push(c);
                     print!("{}", c);
                     crate::serial_print!("{}", c); // Also to serial
-                    serial_println!("[SHELL] Buffer updated: '{}'", self.buffer);
                     
                     // Update graphics console input buffer and re-render on every keystroke
                     if crate::gui::graphics::current_mode() == crate::gui::graphics::VgaMode::Graphics {
-                        serial_println!("[SHELL] Updating graphics console with: '{}'", self.buffer);
                         crate::gui::console::update_input_buffer(&self.buffer);
-                        // Render on every keystroke so user sees what they're typing
-                        crate::gui::desktop::render();
-                        serial_println!("[SHELL] Console rendered");
-                    } else {
-                        serial_println!("[SHELL] Not in graphics mode, skipping console update");
+                        // Render console only so user sees what they're typing
+                        crate::gui::console::render_overlay(
+                            crate::gui::graphics::WIDTH,
+                            crate::gui::graphics::HEIGHT,
+                        );
                     }
-                } else {
-                    serial_println!("[SHELL] Buffer full ({} chars), ignoring", MAX_COMMAND_LEN);
                 }
             }
         }

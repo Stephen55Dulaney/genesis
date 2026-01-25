@@ -124,7 +124,7 @@ impl DesktopLayout {
             gfx.clear(graphics::Color::Black);
             
             // Adjust zone heights to leave room for console at bottom
-            let console_height = if console::is_initialized() { 120 } else { 0 };
+            let console_height = if console::is_initialized() { 80 } else { 0 };
             let available_height = self.height - console_height;
             
             // Render each zone (adjusted for console space)

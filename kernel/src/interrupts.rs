@@ -144,10 +144,9 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
     let mut keyboard = KEYBOARD.lock();
     
     if let Ok(Some(key_event)) = keyboard.add_byte(scancode) {
-        // CRITICAL: Only process key PRESSES, not releases
+        // CRITICAL: Only process key DOWN events, not releases
         // This prevents duplicate character processing and modifier key noise
-        if key_event.state != KeyState::Pressed {
-            // Key release - ignore it (but still acknowledge interrupt)
+        if key_event.state != KeyState::Down {
             unsafe {
                 PICS.lock().notify_end_of_interrupt(InterruptIndex::Keyboard.as_u8());
             }
@@ -170,11 +169,6 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
                 DecodedKey::RawKey(key) => {
                     // Handle special keys
                     match key {
-                        pc_keyboard::KeyCode::Enter => {
-                            // CRITICAL: Enter key sends newline to execute command
-                            serial_println!("[KEY] Enter key pressed - executing command");
-                            crate::shell::Shell::push_char('\n');
-                        }
                         pc_keyboard::KeyCode::Backspace => {
                             // Send backspace character to shell
                             crate::shell::Shell::push_char('\u{08}');
