@@ -38,15 +38,13 @@ except ImportError:
 # Configuration
 QEMU_CMD = [
     "qemu-system-x86_64",
-    "-drive", "format=raw,file=/Users/stephendulaney/genesis/target/x86_64-unknown-none/release/bootimage-genesis_kernel.bin",
-    "-m", "128M",  # Increased memory for graphics
+    "-drive", "format=raw,file=/Users/stephendulaney/genesis/target/x86_64-unknown-none/debug/bootimage-genesis_kernel.bin",
+    "-m", "128M",
     "-machine", "pc",
     "-cpu", "max",
-    "-serial", "stdio",
-    "-display", "default",  # Show graphics window for GUI testing
-    "-vga", "std",  # Standard VGA for graphics mode support
-    "-no-reboot",  # Exit on triple fault instead of rebooting
-    "-no-shutdown"  # Don't shutdown on exit
+    "-nographic",  # Text mode via terminal (no QEMU graphics window)
+    "-no-reboot",
+    "-no-shutdown"
 ]
 
 # Initialize Gemini if available
@@ -55,7 +53,7 @@ if GEMINI_AVAILABLE:
     api_key = os.getenv("GEMINI_API_KEY")
     if api_key:
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        model = genai.GenerativeModel('gemini-2.0-flash')
         print("[*] Gemini API configured")
     else:
         print("[!] GEMINI_API_KEY not set. Set it in your environment.")
