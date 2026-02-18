@@ -32,6 +32,8 @@ mod storage;
 use agents::supervisor::Supervisor;
 use agents::thomas::Thomas;
 use agents::archimedes::Archimedes;
+use gui::desktop;
+use gui::console;
 
 // Define the kernel entry point
 entry_point!(kernel_main);
@@ -96,6 +98,14 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     // Initialize interrupts (IDT + PIC)
     interrupts::init();
     
+    // =========================================================================
+    // MEMORY STORE INITIALIZATION
+    // =========================================================================
+
+    serial_println!();
+    serial_println!("[MEMORY_STORE] Loading persistent memories...");
+    crate::storage::memory_store::load();
+
     // =========================================================================
     // AGENT SYSTEM INITIALIZATION
     // =========================================================================
@@ -230,6 +240,15 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
         // Process agent ticks
         supervisor.tick();
         
+        // Periodically auto-save memory store
+        static mut MEMORY_SAVE_COUNTER: u64 = 0;
+        unsafe {
+            MEMORY_SAVE_COUNTER += 1;
+            if MEMORY_SAVE_COUNTER % 10000 == 0 {
+                crate::storage::memory_store::save();
+            }
+        }
+
         // Periodically re-render desktop in graphics mode to keep console visible
         // (This ensures console updates even if render wasn't triggered by input)
         if gui::graphics::current_mode() == gui::graphics::VgaMode::Graphics {

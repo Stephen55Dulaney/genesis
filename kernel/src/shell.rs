@@ -181,6 +181,12 @@ impl Shell {
                 shell_print!("  graphics  - Test graphics rendering (draw test pattern)");
                 shell_print!("  archimedes - Talk to Archimedes (Daily Ambition Agent)");
                 shell_print!("  desktop   - Show split-screen desktop (Conversation + Ambition)");
+                shell_print!("  memory search <q> - Search memory for matching entries");
+                shell_print!("  memory list   - Show recent memory entries (last 10)");
+                shell_print!("  memory stats  - Show memory store statistics");
+                shell_print!("  memory get <id> - Show full details of a memory entry");
+                shell_print!("  memory save   - Persist memory to filesystem");
+                shell_print!("  memory store <text> - Manually store an observation");
                 shell_print!("  mode      - Switch VGA mode (text/graphics) or show current mode");
                 shell_print!("  F1 or Esc - Toggle between text and graphics mode (keyboard shortcut)");
                 shell_print!("  F11       - Show fullscreen exit instructions");
@@ -390,8 +396,106 @@ impl Shell {
                 shell_print!("Press F1 to toggle, or use 'mode text' / 'mode graphics'");
             }
             _ => {
+                // Memory commands
+                if cmd == "memory stats" {
+                    let st = crate::storage::memory_store::stats();
+                    shell_print!("=== MEMORY STORE ===");
+                    shell_print!("  Entries: {}", st.entry_count);
+                    shell_print!("  Index keywords: {}", st.index_size);
+                    shell_print!("  Estimated size: {} bytes", st.estimated_bytes);
+                    if !st.top_keywords.is_empty() {
+                        shell_print!("  Top keywords:");
+                        for (kw, count) in st.top_keywords.iter().take(5) {
+                            shell_print!("    {} ({})", kw, count);
+                        }
+                    }
+                } else if cmd == "memory list" {
+                    let entries = crate::storage::memory_store::recent(10);
+                    if entries.is_empty() {
+                        shell_print!("No memories stored yet.");
+                    } else {
+                        shell_print!("=== RECENT MEMORIES ({}) ===", entries.len());
+                        for entry in &entries {
+                            let preview = if entry.content.len() > 60 {
+                                let s: String = entry.content.chars().take(57).collect();
+                                format!("{}...", s)
+                            } else {
+                                entry.content.clone()
+                            };
+                            shell_print!("  [{}] ({}) {}", entry.id, entry.kind.as_str(), preview);
+                        }
+                    }
+                } else if cmd == "memory save" {
+                    crate::storage::memory_store::save();
+                    shell_print!("Memory persisted to filesystem.");
+                } else if cmd.starts_with("memory search ") {
+                    let query = cmd.strip_prefix("memory search ").unwrap_or("").trim();
+                    if query.is_empty() {
+                        shell_print!("Usage: memory search <query>");
+                    } else {
+                        let results = crate::storage::memory_store::search(query);
+                        if results.is_empty() {
+                            shell_print!("No results for: {}", query);
+                        } else {
+                            shell_print!("=== SEARCH RESULTS ({}) ===", results.len());
+                            for (id, score) in results.iter().take(10) {
+                                if let Some(entry) = crate::storage::memory_store::get(*id) {
+                                    let preview = if entry.content.len() > 50 {
+                                        let s: String = entry.content.chars().take(47).collect();
+                                        format!("{}...", s)
+                                    } else {
+                                        entry.content.clone()
+                                    };
+                                    shell_print!("  [{}] score={} ({}) {}", id, score, entry.kind.as_str(), preview);
+                                }
+                            }
+                        }
+                    }
+                } else if cmd.starts_with("memory get ") {
+                    let id_str = cmd.strip_prefix("memory get ").unwrap_or("").trim();
+                    match id_str.parse::<u64>() {
+                        Ok(id) => {
+                            match crate::storage::memory_store::get(id) {
+                                Some(entry) => {
+                                    shell_print!("=== MEMORY #{} ===", entry.id);
+                                    shell_print!("  Kind: {}", entry.kind.as_str());
+                                    shell_print!("  Source: {}", entry.source);
+                                    shell_print!("  Timestamp: {}", entry.timestamp);
+                                    shell_print!("  Accessed: {} times", entry.access_count);
+                                    shell_print!("  Keywords: {}", entry.keywords.join(", "));
+                                    shell_print!("  Content: {}", entry.content);
+                                }
+                                None => {
+                                    shell_print!("No memory with ID {}", id);
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            shell_print!("Usage: memory get <id>");
+                        }
+                    }
+                } else if cmd.starts_with("memory store ") {
+                    let text = cmd.strip_prefix("memory store ").unwrap_or("").trim();
+                    if text.is_empty() {
+                        shell_print!("Usage: memory store <text>");
+                    } else {
+                        let id = crate::storage::memory_store::store(
+                            text,
+                            crate::storage::memory_store::MemoryKind::Observation,
+                            "shell",
+                        );
+                        shell_print!("Stored as memory #{}", id);
+                    }
+                } else if cmd == "memory" {
+                    shell_print!("Usage: memory <command>");
+                    shell_print!("  memory search <query> - Search memories");
+                    shell_print!("  memory list           - Show recent entries");
+                    shell_print!("  memory stats          - Show statistics");
+                    shell_print!("  memory get <id>       - Show full entry");
+                    shell_print!("  memory save           - Persist to filesystem");
+                    shell_print!("  memory store <text>   - Store an observation");
                 // Check if it's a "mode" command with argument
-                if cmd.starts_with("mode ") {
+                } else if cmd.starts_with("mode ") {
                     let mode_arg = cmd.strip_prefix("mode ").unwrap_or("").trim();
                     match mode_arg {
                         "text" => {

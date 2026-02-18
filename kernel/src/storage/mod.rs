@@ -7,5 +7,4 @@
 //! Later, we can add FAT32 or custom file system support.
 
 pub mod filesystem;
-
-
+pub mod memory_store;

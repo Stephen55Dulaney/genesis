@@ -38,6 +38,7 @@ use super::message::{Message, MessageKind, SystemEvent, FeedbackType};
 use super::prompts::{library, evolution, character_ids};
 use super::prompts::academy;
 use crate::{println, serial_println};
+use crate::storage::memory_store::{self, MemoryKind};
 
 /// The Agent Supervisor - orchestrates all agents
 pub struct Supervisor {
@@ -254,8 +255,45 @@ impl Supervisor {
         const MAX_INSIGHTS: usize = 50;
         for msg in feedback_messages {
             if let MessageKind::Feedback(feedback) = msg.kind.clone() {
+                // Auto-store feedback in persistent memory
+                let source = alloc::format!("agent-{}", msg.from.0);
+                match &feedback {
+                    FeedbackType::Spark { content, context } => {
+                        memory_store::store_with_timestamp(
+                            &alloc::format!("{} (context: {})", content, context),
+                            MemoryKind::Spark,
+                            &source,
+                            self.tick,
+                        );
+                    }
+                    FeedbackType::Connection { from, to, pattern } => {
+                        memory_store::store_with_timestamp(
+                            &alloc::format!("{} -> {}: {}", from, to, pattern),
+                            MemoryKind::Connection,
+                            &source,
+                            self.tick,
+                        );
+                    }
+                    FeedbackType::Resource { description, location } => {
+                        memory_store::store_with_timestamp(
+                            &alloc::format!("{} (at: {})", description, location),
+                            MemoryKind::Resource,
+                            &source,
+                            self.tick,
+                        );
+                    }
+                    FeedbackType::Feeling { tag, intensity } => {
+                        memory_store::store_with_timestamp(
+                            &alloc::format!("{} (intensity: {})", tag, intensity),
+                            MemoryKind::Feeling,
+                            &source,
+                            self.tick,
+                        );
+                    }
+                }
+
                 self.constellation_of_insights.push(feedback);
-                
+
                 // Keep only the most recent insights
                 if self.constellation_of_insights.len() > MAX_INSIGHTS {
                     self.constellation_of_insights.remove(0);
@@ -263,10 +301,63 @@ impl Supervisor {
             }
         }
         
+        // Handle memory messages (supervisor intercepts these)
+        let mut routable_messages = Vec::new();
+        for msg in other_messages {
+            match &msg.kind {
+                MessageKind::MemoryStore { content, kind } => {
+                    let mem_kind = MemoryKind::from_str(kind)
+                        .unwrap_or(MemoryKind::Observation);
+                    let source = alloc::format!("agent-{}", msg.from.0);
+                    let id = memory_store::store_with_timestamp(
+                        content, mem_kind, &source, self.tick,
+                    );
+                    serial_println!("[MEMORY_STORE] Agent {} stored memory #{}", msg.from.0, id);
+                    // Send confirmation back
+                    let reply = Message::new(
+                        self.id,
+                        Some(msg.from),
+                        MessageKind::MemoryResults {
+                            results: alloc::vec![(id, content.clone())],
+                        },
+                    );
+                    self.message_queue.push(reply);
+                }
+                MessageKind::MemorySearch { query } => {
+                    let search_results = memory_store::search(query);
+                    let results: Vec<(u64, String)> = search_results.iter()
+                        .take(10)
+                        .filter_map(|(id, _score)| {
+                            memory_store::get(*id).map(|e| {
+                                let preview = if e.content.len() > 80 {
+                                    let s: String = e.content.chars().take(77).collect();
+                                    alloc::format!("{}...", s)
+                                } else {
+                                    e.content.clone()
+                                };
+                                (*id, preview)
+                            })
+                        })
+                        .collect();
+                    serial_println!("[MEMORY_STORE] Agent {} searched '{}', {} results",
+                        msg.from.0, query, results.len());
+                    let reply = Message::new(
+                        self.id,
+                        Some(msg.from),
+                        MessageKind::MemoryResults { results },
+                    );
+                    self.message_queue.push(reply);
+                }
+                _ => {
+                    routable_messages.push(msg);
+                }
+            }
+        }
+
         // Route other messages to agents
         for agent in self.agents.iter_mut() {
             // Collect messages for this agent
-            let mut inbox: Vec<Message> = other_messages
+            let mut inbox: Vec<Message> = routable_messages
                 .iter()
                 .filter(|m| m.to.is_none() || m.to == Some(agent.id()))
                 .cloned()
@@ -306,44 +397,27 @@ impl Supervisor {
         }
     }
     
-    /// Serendipity Engine: Find overlapping themes and connections
+    /// Serendipity Engine: Find overlapping themes using memory search
     fn check_serendipity(&mut self) {
-        if self.constellation_of_insights.len() < 2 {
+        let stats = memory_store::stats();
+        if stats.entry_count < 2 {
             return;
         }
-        
-        // Simple serendipity: look for similar keywords in Sparks
-        let mut themes: Vec<(String, usize)> = Vec::new();
-        
-        for insight in &self.constellation_of_insights {
-            if let FeedbackType::Spark { content, .. } = insight {
-                // Extract simple keywords (in a real system, this would be more sophisticated)
-                let words: Vec<&str> = content.split_whitespace().collect();
-                for word in words {
-                    if word.len() > 4 {
-                        // Count occurrences
-                        let count = self.constellation_of_insights.iter()
-                            .filter(|i| {
-                                if let FeedbackType::Spark { content: c, .. } = i {
-                                    c.contains(word)
-                                } else {
-                                    false
-                                }
-                            })
-                            .count();
-                        
-                        if count >= 2 {
-                            themes.push((String::from(word), count));
-                        }
+
+        // Use the memory store's top keywords to find themes
+        if !stats.top_keywords.is_empty() {
+            let mut themes_found = false;
+            for (keyword, count) in stats.top_keywords.iter().take(5) {
+                if *count >= 2 {
+                    if !themes_found {
+                        serial_println!("[SERENDIPITY] Found overlapping themes in memory:");
+                        themes_found = true;
                     }
+                    // Search memory for this keyword to find connections
+                    let results = memory_store::search(keyword);
+                    serial_println!("  - '{}' appears in {} entries ({} search hits)",
+                        keyword, count, results.len());
                 }
-            }
-        }
-        
-        if !themes.is_empty() {
-            serial_println!("[SERENDIPITY] Found overlapping themes:");
-            for (theme, count) in themes.iter().take(3) {
-                serial_println!("  - '{}' appears in {} insights", theme, count);
             }
         }
     }

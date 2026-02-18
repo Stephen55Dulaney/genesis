@@ -101,6 +101,22 @@ pub enum MessageKind {
         agent_name: String,
         role: String,
     },
+
+    /// Store something in memory
+    MemoryStore {
+        content: String,
+        kind: String, // "spark", "connection", etc.
+    },
+
+    /// Search memory
+    MemorySearch {
+        query: String,
+    },
+
+    /// Search results returned
+    MemoryResults {
+        results: Vec<(u64, String)>, // (id, content preview)
+    },
 }
 
 /// System-level events from the supervisor
