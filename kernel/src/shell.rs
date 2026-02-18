@@ -112,18 +112,20 @@ impl Shell {
                 
                 // Check if this is a bridge response (not a command)
                 if self.buffer.starts_with("[LLM_RESPONSE]") {
-                    // Display the response instead of executing it
+                    // Display the response cleanly (no echo, no prompt after)
                     let response = self.buffer.strip_prefix("[LLM_RESPONSE]").unwrap_or(&self.buffer).trim();
-                    // shell_print! macro already adds to console, so no need to add again
-                    shell_print!("{}", response);
+                    if !response.is_empty() {
+                        shell_print!("  {}", response);
+                    }
+                    self.buffer.clear();
+                    // No prompt after LLM lines — more will follow
                 } else {
                     // Normal command execution
                     self.execute_command(supervisor);
+                    self.buffer.clear();
+                    print!("{}", self.prompt);
+                    crate::serial_print!("{}", self.prompt); // Also to serial
                 }
-                
-                self.buffer.clear();
-                print!("{}", self.prompt);
-                crate::serial_print!("{}", self.prompt); // Also to serial
             }
             '\u{08}' | '\u{7f}' => {
                 use crate::serial_print;
@@ -140,10 +142,11 @@ impl Shell {
             _ => {
                 if self.buffer.len() < MAX_COMMAND_LEN {
                     self.buffer.push(c);
-                    print!("{}", c);
-                    crate::serial_print!("{}", c); // Also to serial
-                    
-                    // Text mode input - reliable, no allocations
+                    // Don't echo bridge responses (they'll be displayed clean on Enter)
+                    if !self.buffer.starts_with("[LLM_") {
+                        print!("{}", c);
+                        crate::serial_print!("{}", c); // Also to serial
+                    }
                 }
             }
         }
