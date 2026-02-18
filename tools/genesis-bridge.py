@@ -42,7 +42,9 @@ QEMU_CMD = [
     "-m", "128M",
     "-machine", "pc",
     "-cpu", "max",
-    "-nographic",  # Text mode via terminal (no QEMU graphics window)
+    "-serial", "stdio",
+    "-display", "default",  # QEMU window for VGA text mode
+    "-vga", "std",
     "-no-reboot",
     "-no-shutdown"
 ]

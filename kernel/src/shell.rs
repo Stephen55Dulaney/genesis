@@ -519,6 +519,9 @@ impl Shell {
                             shell_print!("  mode           - Show current mode");
                         }
                     }
+                } else if cmd == "breathe" {
+                    shell_print!("Usage: breathe [your ambition text]");
+                    shell_print!("Example: breathe Today I want us to build the graphics system");
                 } else if cmd.starts_with("breathe ") {
                     let ambition = cmd.strip_prefix("breathe ").unwrap_or("").trim();
                     if ambition.is_empty() {
