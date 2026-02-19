@@ -270,8 +270,173 @@ def update_genesis_state(line):
         parts.append(f"Tests: {_genesis_state['tests']}")
     _genesis_state["summary"] = " ".join(parts)
 
+# ── Claude Tool Definitions ──────────────────────────────────────────────────
+# Claude can use these tools autonomously when processing Telegram messages.
+# This enables: URL fetching, code execution, file operations, and shell commands.
+
+CLAUDE_TOOLS = [
+    {
+        "name": "fetch_url",
+        "description": "Fetch content from a URL and return the text. Strips HTML tags. Use for reading web pages, docs, articles.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "The URL to fetch"}
+            },
+            "required": ["url"]
+        }
+    },
+    {
+        "name": "run_python",
+        "description": "Execute Python code and return stdout/stderr. Use for calculations, data processing, testing code, fixing bugs.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "code": {"type": "string", "description": "Python code to execute"}
+            },
+            "required": ["code"]
+        }
+    },
+    {
+        "name": "run_bash",
+        "description": "Execute a bash command and return stdout/stderr. Use for git, system info, file operations, builds.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string", "description": "The bash command to run"}
+            },
+            "required": ["command"]
+        }
+    },
+    {
+        "name": "read_file",
+        "description": "Read the contents of a file from disk.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute path to the file"}
+            },
+            "required": ["path"]
+        }
+    },
+    {
+        "name": "write_file",
+        "description": "Write content to a file on disk. Creates parent directories if needed.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute path to the file"},
+                "content": {"type": "string", "description": "Content to write"}
+            },
+            "required": ["path", "content"]
+        }
+    },
+    {
+        "name": "list_files",
+        "description": "List files and directories at a given path.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Directory path to list"}
+            },
+            "required": ["path"]
+        }
+    },
+]
+
+_MAX_TOOL_ITERATIONS = 10
+
+
+def _strip_html(html):
+    """Strip HTML tags and return plain text."""
+    text = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL)
+    text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL)
+    text = re.sub(r'<[^>]+>', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
+def _send_telegram_typing():
+    """Show 'typing...' indicator in Telegram chat."""
+    if not TELEGRAM_AVAILABLE:
+        return
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendChatAction"
+        payload = json.dumps({"chat_id": TELEGRAM_CHAT_ID, "action": "typing"}).encode("utf-8")
+        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=5, context=_ssl_ctx)
+    except Exception:
+        pass
+
+
+def execute_tool(name, tool_input):
+    """Execute a tool and return the result string."""
+    try:
+        if name == "fetch_url":
+            req = urllib.request.Request(
+                tool_input["url"],
+                headers={"User-Agent": "Mozilla/5.0 (Genesis Bridge)"}
+            )
+            resp = urllib.request.urlopen(req, timeout=15, context=_ssl_ctx)
+            raw = resp.read().decode("utf-8", errors="ignore")
+            text = _strip_html(raw)
+            return text[:10000] + ("\n...(truncated)" if len(text) > 10000 else "")
+
+        elif name == "run_python":
+            result = subprocess.run(
+                [sys.executable, "-c", tool_input["code"]],
+                capture_output=True, text=True, timeout=30
+            )
+            out = result.stdout + (f"\nSTDERR: {result.stderr}" if result.stderr else "")
+            if result.returncode != 0:
+                out += f"\n(exit code {result.returncode})"
+            return (out.strip() or "(no output)")[:10000]
+
+        elif name == "run_bash":
+            result = subprocess.run(
+                tool_input["command"], shell=True,
+                capture_output=True, text=True, timeout=30
+            )
+            out = result.stdout + (f"\nSTDERR: {result.stderr}" if result.stderr else "")
+            if result.returncode != 0:
+                out += f"\n(exit code {result.returncode})"
+            return (out.strip() or "(no output)")[:10000]
+
+        elif name == "read_file":
+            with open(tool_input["path"], "r") as f:
+                content = f.read(50000)
+            return content + ("\n...(truncated at 50KB)" if len(content) >= 50000 else "")
+
+        elif name == "write_file":
+            path = tool_input["path"]
+            content = tool_input["content"]
+            dirname = os.path.dirname(path)
+            if dirname:
+                os.makedirs(dirname, exist_ok=True)
+            with open(path, "w") as f:
+                f.write(content)
+            return f"Wrote {len(content)} bytes to {path}"
+
+        elif name == "list_files":
+            entries = sorted(os.listdir(tool_input["path"]))
+            lines = []
+            for e in entries[:100]:
+                full = os.path.join(tool_input["path"], e)
+                if os.path.isdir(full):
+                    lines.append(f"  {e}/")
+                else:
+                    lines.append(f"  {e}  ({os.path.getsize(full)} bytes)")
+            return "\n".join(lines) or "(empty directory)"
+
+        return f"Unknown tool: {name}"
+    except subprocess.TimeoutExpired:
+        return "Error: timed out after 30 seconds"
+    except Exception as e:
+        return f"Error: {e}"
+
+
 def call_claude(user_message):
-    """Call Anthropic Claude API with conversation history and Genesis context."""
+    """Call Anthropic Claude with tools. Runs an agentic loop until Claude is done."""
     if not ANTHROPIC_AVAILABLE:
         return None
 
@@ -280,40 +445,69 @@ def call_claude(user_message):
     recent_mem = "\n".join(_recent_memory_items[-5:]) if _recent_memory_items else "No memory entries yet."
     system = AGENT_SYSTEM_PROMPT.format(system_state=system_state, recent_memory=recent_mem)
 
-    # Add user message to history
+    # Add user message to persistent history
     _conversation_history.append({"role": "user", "content": user_message})
     if len(_conversation_history) > _MAX_HISTORY:
         _conversation_history.pop(0)
 
+    # Working messages for this turn (copy of history + tool interactions)
+    working_messages = [dict(m) for m in _conversation_history]
+
     try:
-        url = "https://api.anthropic.com/v1/messages"
-        payload = json.dumps({
-            "model": ANTHROPIC_MODEL,
-            "max_tokens": 300,
-            "system": system,
-            "messages": list(_conversation_history),
-        }).encode("utf-8")
-        req = urllib.request.Request(url, data=payload, headers={
-            "Content-Type": "application/json",
-            "x-api-key": ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",
-        })
-        resp = urllib.request.urlopen(req, timeout=30, context=_ssl_ctx)
-        data = json.loads(resp.read().decode("utf-8"))
+        for iteration in range(_MAX_TOOL_ITERATIONS):
+            _send_telegram_typing()
 
-        # Extract text from response
-        reply = ""
-        for block in data.get("content", []):
-            if block.get("type") == "text":
-                reply += block["text"]
+            payload = json.dumps({
+                "model": ANTHROPIC_MODEL,
+                "max_tokens": 1024,
+                "system": system,
+                "tools": CLAUDE_TOOLS,
+                "messages": working_messages,
+            }).encode("utf-8")
+            req = urllib.request.Request(
+                "https://api.anthropic.com/v1/messages",
+                data=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "x-api-key": ANTHROPIC_API_KEY,
+                    "anthropic-version": "2023-06-01",
+                },
+            )
+            resp = urllib.request.urlopen(req, timeout=60, context=_ssl_ctx)
+            data = json.loads(resp.read().decode("utf-8"))
 
-        # Add assistant reply to history
-        if reply:
-            _conversation_history.append({"role": "assistant", "content": reply})
-            if len(_conversation_history) > _MAX_HISTORY:
-                _conversation_history.pop(0)
+            content = data.get("content", [])
+            stop_reason = data.get("stop_reason", "end_turn")
 
-        return reply
+            # Done — no more tool calls
+            if stop_reason != "tool_use":
+                reply = "".join(b["text"] for b in content if b.get("type") == "text")
+                if reply:
+                    _conversation_history.append({"role": "assistant", "content": reply})
+                    if len(_conversation_history) > _MAX_HISTORY:
+                        _conversation_history.pop(0)
+                return reply
+
+            # Tool use — execute each tool and continue the loop
+            working_messages.append({"role": "assistant", "content": content})
+
+            tool_results = []
+            for block in content:
+                if block.get("type") == "tool_use":
+                    name = block["name"]
+                    print(f"[TOOL] {name}({json.dumps(block['input'])[:80]})")
+                    result = execute_tool(name, block["input"])
+                    print(f"[TOOL] -> {result[:120]}")
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block["id"],
+                        "content": result,
+                    })
+
+            working_messages.append({"role": "user", "content": tool_results})
+
+        return "(Reached max tool iterations. Try a simpler request.)"
+
     except Exception as e:
         print(f"[CLAUDE] API error: {e}", file=sys.stderr)
         return None
