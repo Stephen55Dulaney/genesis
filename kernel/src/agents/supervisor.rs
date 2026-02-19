@@ -439,21 +439,12 @@ impl Supervisor {
             return;
         }
 
-        // Use the memory store's top keywords to find themes
+        // Use the memory store's top keywords to find the strongest theme
+        // Only broadcast ONE connection per serendipity check to avoid duplicate notifications
         if !stats.top_keywords.is_empty() {
-            let mut themes_found = false;
             for (keyword, count) in stats.top_keywords.iter().take(5) {
                 if *count >= 2 {
-                    if !themes_found {
-                        serial_println!("[SERENDIPITY] Found overlapping themes in memory:");
-                        themes_found = true;
-                    }
-                    // Search memory for this keyword to find connections
                     let results = memory_store::search(keyword);
-                    serial_println!("  - '{}' appears in {} entries ({} search hits)",
-                        keyword, count, results.len());
-
-                    // Get content previews of the first two matching entries
                     if results.len() >= 2 {
                         let first_preview = memory_store::get(results[0].0)
                             .map(|e| if e.content.len() > 60 {
@@ -471,7 +462,6 @@ impl Supervisor {
                             });
 
                         if let (Some(from), Some(to)) = (first_preview, second_preview) {
-                            // Broadcast connection to all agents
                             let connection_msg = Message::broadcast(
                                 self.id,
                                 MessageKind::Feedback(FeedbackType::Connection {
@@ -481,8 +471,10 @@ impl Supervisor {
                                 }),
                             );
                             self.message_queue.push(connection_msg);
-                            serial_println!("[SERENDIPITY] Broadcasted connection to agents for theme '{}'", keyword);
+                            serial_println!("[SERENDIPITY] Theme '{}' ({} entries, {} hits) — broadcasted connection",
+                                keyword, count, results.len());
                             serial_println!("[NOTIFY] Serendipity: theme '{}' links insights across agents", keyword);
+                            break; // Only one notification per cycle
                         }
                     }
                 }
