@@ -148,6 +148,41 @@ def send_telegram_reply(text: str):
             print(f"[TELEGRAM] Reply send failed: {e}", file=sys.stderr)
     threading.Thread(target=_send, daemon=True).start()
 
+def _download_telegram_file(file_id):
+    """Download a file from Telegram servers. Returns (bytes, mime_type) or (None, None)."""
+    import base64 as _b64
+    try:
+        # Step 1: get the file path on Telegram's servers
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getFile"
+        payload = json.dumps({"file_id": file_id}).encode("utf-8")
+        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+        resp = urllib.request.urlopen(req, timeout=10, context=_ssl_ctx)
+        data = json.loads(resp.read().decode("utf-8"))
+
+        if not data.get("ok"):
+            print(f"[TELEGRAM] getFile failed: {data}", file=sys.stderr)
+            return None, None
+
+        file_path = data["result"]["file_path"]
+
+        # Step 2: download the actual file
+        download_url = f"https://api.telegram.org/file/bot{TELEGRAM_BOT_TOKEN}/{file_path}"
+        resp = urllib.request.urlopen(download_url, timeout=30, context=_ssl_ctx)
+        image_bytes = resp.read()
+
+        # Detect mime type from file extension
+        ext = file_path.rsplit(".", 1)[-1].lower() if "." in file_path else "jpg"
+        mime_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+                    "gif": "image/gif", "webp": "image/webp"}
+        mime_type = mime_map.get(ext, "image/jpeg")
+
+        print(f"[TELEGRAM] Downloaded image: {file_path} ({len(image_bytes)} bytes, {mime_type})")
+        return image_bytes, mime_type
+    except Exception as e:
+        print(f"[TELEGRAM] File download failed: {e}", file=sys.stderr)
+        return None, None
+
+
 def poll_telegram(process):
     """Poll Telegram for incoming messages, route through Claude, reply via Telegram."""
     if not TELEGRAM_AVAILABLE:
@@ -170,28 +205,60 @@ def poll_telegram(process):
                     last_update_id = update["update_id"]
                     msg = update.get("message", {})
                     chat_id = str(msg.get("chat", {}).get("id", ""))
-                    text = msg.get("text", "")
+
                     # Only accept messages from the configured chat
-                    if chat_id == TELEGRAM_CHAT_ID and text:
-                        print(f"[TELEGRAM] Received: {text}")
+                    if chat_id != TELEGRAM_CHAT_ID:
+                        continue
 
-                        # Route through Claude if available
-                        if ANTHROPIC_AVAILABLE:
-                            print(f"[CLAUDE] Processing: {text}")
-                            reply = call_claude(text)
-                            if reply:
-                                send_telegram_reply(reply)
-                                print(f"[CLAUDE] Replied: {reply[:80]}...")
-                                # Also inject summary into Genesis so agents know
-                                try:
-                                    summary = f"[TELEGRAM] {text}\n"
-                                    process.stdin.write(summary.encode("utf-8"))
-                                    process.stdin.flush()
-                                except Exception:
-                                    pass
-                                continue
+                    text = msg.get("text", "") or msg.get("caption", "") or ""
+                    image_bytes = None
+                    image_mime = None
 
-                        # Fallback: inject into Genesis for kernel keyword matching
+                    # ── Handle photos (Telegram compresses to JPEG) ──
+                    if "photo" in msg:
+                        # Telegram gives multiple sizes; take the largest (last)
+                        photo = msg["photo"][-1]
+                        file_id = photo["file_id"]
+                        print(f"[TELEGRAM] Received photo (file_id: {file_id[:20]}...)")
+                        image_bytes, image_mime = _download_telegram_file(file_id)
+                        if not text:
+                            text = "What do you see in this image? Describe it in detail."
+
+                    # ── Handle documents (full-res images, PDFs, etc.) ──
+                    elif "document" in msg:
+                        doc = msg["document"]
+                        doc_mime = doc.get("mime_type", "")
+                        if doc_mime.startswith("image/"):
+                            file_id = doc["file_id"]
+                            print(f"[TELEGRAM] Received document image: {doc.get('file_name', '?')}")
+                            image_bytes, image_mime = _download_telegram_file(file_id)
+                            if not text:
+                                text = f"What do you see in this image ({doc.get('file_name', 'image')})? Describe it in detail."
+
+                    if not text and not image_bytes:
+                        continue  # skip unsupported message types
+
+                    print(f"[TELEGRAM] Received: {text[:80]}{'...' if len(text) > 80 else ''}"
+                          + (f" [+image {len(image_bytes)} bytes]" if image_bytes else ""))
+
+                    # Route through Claude if available
+                    if ANTHROPIC_AVAILABLE:
+                        print(f"[CLAUDE] Processing: {text[:80]}{'...' if len(text) > 80 else ''}")
+                        reply = call_claude(text, image_data=image_bytes, image_mime=image_mime)
+                        if reply:
+                            send_telegram_reply(reply)
+                            print(f"[CLAUDE] Replied: {reply[:80]}...")
+                            # Also inject summary into Genesis so agents know
+                            try:
+                                summary = f"[TELEGRAM] {text}\n"
+                                process.stdin.write(summary.encode("utf-8"))
+                                process.stdin.flush()
+                            except Exception:
+                                pass
+                            continue
+
+                    # Fallback: inject into Genesis for kernel keyword matching
+                    if text:
                         telegram_line = f"[TELEGRAM] {text}\n"
                         try:
                             process.stdin.write(telegram_line.encode("utf-8"))
@@ -444,8 +511,10 @@ def execute_tool(name, tool_input):
         return f"Error: {e}"
 
 
-def call_claude(user_message):
-    """Call Anthropic Claude with tools. Runs an agentic loop until Claude is done."""
+def call_claude(user_message, image_data=None, image_mime=None):
+    """Call Anthropic Claude with tools and optional vision. Runs an agentic loop until Claude is done."""
+    import base64 as _b64
+
     if not ANTHROPIC_AVAILABLE:
         return None
 
@@ -454,13 +523,33 @@ def call_claude(user_message):
     recent_mem = "\n".join(_recent_memory_items[-5:]) if _recent_memory_items else "No memory entries yet."
     system = AGENT_SYSTEM_PROMPT.format(system_state=system_state, recent_memory=recent_mem)
 
-    # Add user message to persistent history
-    _conversation_history.append({"role": "user", "content": user_message})
+    # Add text-only version to persistent history (don't store base64 images)
+    history_text = user_message
+    if image_data:
+        history_text = f"[Sent image] {user_message}"
+    _conversation_history.append({"role": "user", "content": history_text})
     if len(_conversation_history) > _MAX_HISTORY:
         _conversation_history.pop(0)
 
     # Working messages for this turn (copy of history + tool interactions)
     working_messages = [dict(m) for m in _conversation_history]
+
+    # If image provided, replace the last user message with multimodal content
+    if image_data:
+        b64_image = _b64.b64encode(image_data).decode("utf-8")
+        multimodal_content = [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": image_mime or "image/jpeg",
+                    "data": b64_image,
+                },
+            },
+            {"type": "text", "text": user_message},
+        ]
+        working_messages[-1] = {"role": "user", "content": multimodal_content}
+        print(f"[CLAUDE] Sending multimodal message ({len(image_data)} byte image + text)")
 
     try:
         for iteration in range(_MAX_TOOL_ITERATIONS):
