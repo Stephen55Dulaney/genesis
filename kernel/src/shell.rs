@@ -45,6 +45,9 @@ const MAX_COMMAND_LEN: usize = 128;
 /// A queue for incoming characters from interrupts (keyboard/serial)
 pub static INPUT_QUEUE: Lazy<ArrayQueue<char>> = Lazy::new(|| ArrayQueue::new(128));
 
+/// Buffer for accumulating [MEMORY_LOAD] lines from the serial bridge
+static MEMORY_LOAD_BUF: Lazy<Mutex<String>> = Lazy::new(|| Mutex::new(String::new()));
+
 lazy_static::lazy_static! {
     /// Global shell instance
     pub static ref SHELL: Mutex<Shell> = Mutex::new(Shell::new());
@@ -130,6 +133,25 @@ impl Shell {
                         ));
                     }
                     self.buffer.clear();
+                } else if self.buffer.starts_with("[MEMORY_LOAD_DONE]") {
+                    // Bridge finished sending memory data — deserialize accumulated buffer
+                    let data = {
+                        let mut buf = MEMORY_LOAD_BUF.lock();
+                        let d = buf.clone();
+                        buf.clear();
+                        d
+                    };
+                    crate::storage::memory_store::load_from_serial_data(&data);
+                    self.buffer.clear();
+                } else if self.buffer.starts_with("[MEMORY_LOAD]") {
+                    // Accumulate a memory entry line from the bridge
+                    let entry_line = self.buffer.strip_prefix("[MEMORY_LOAD]").unwrap_or("").trim();
+                    if !entry_line.is_empty() {
+                        let mut buf = MEMORY_LOAD_BUF.lock();
+                        buf.push_str(entry_line);
+                        buf.push('\n');
+                    }
+                    self.buffer.clear();
                 } else if self.buffer.starts_with("[TELEGRAM_REPLY]") {
                     // Outgoing reply from agent — don't display locally, bridge handles it
                     self.buffer.clear();
@@ -157,7 +179,7 @@ impl Shell {
                 if self.buffer.len() < MAX_COMMAND_LEN {
                     self.buffer.push(c);
                     // Don't echo bridge responses (they'll be displayed clean on Enter)
-                    if !self.buffer.starts_with("[LLM_") && !self.buffer.starts_with("[TELEGRAM") {
+                    if !self.buffer.starts_with("[LLM_") && !self.buffer.starts_with("[TELEGRAM") && !self.buffer.starts_with("[MEMORY_LOAD") {
                         print!("{}", c);
                         crate::serial_print!("{}", c); // Also to serial
                     }

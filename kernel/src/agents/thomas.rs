@@ -244,14 +244,13 @@ impl Agent for Thomas {
                     );
                     ctx.outbox.push(connection);
                     serial_println!("[THOMAS] Detected stability pattern across {} memory entries", results.len());
-                    serial_println!("[NOTIFY] Thomas detected stability pattern across {} observations", results.len());
                 }
             }
         }
 
-        // Periodically send enriched Sparks (every 1000 ticks = ~10 seconds)
+        // Periodically send enriched Sparks (every 6000 ticks ~1 min)
         self.spark_counter += 1;
-        if self.spark_counter >= 1000 && self.tests_passed > 0 {
+        if self.spark_counter >= 6000 && self.tests_passed > 0 {
             let spark = Message::new(
                 self.id,
                 None,
@@ -266,9 +265,9 @@ impl Agent for Thomas {
             serial_println!("[THOMAS] Sent Spark: Test insights");
         }
 
-        // Health observation: store a health snapshot in memory (every 2000 ticks)
+        // Health observation: store a health snapshot in memory (every 12000 ticks ~2 min)
         self.memory_check_counter += 1;
-        if self.memory_check_counter >= 2000 {
+        if self.memory_check_counter >= 12000 {
             self.memory_check_counter = 0;
             let store = Message::new(
                 self.id,
@@ -292,13 +291,11 @@ impl Agent for Thomas {
             );
             ctx.outbox.push(spark);
             serial_println!("[THOMAS] Stored system health observation at tick {}", ctx.tick);
-            serial_println!("[NOTIFY] Thomas health check: {}/{} tests passed, {} msgs at tick {}",
-                self.tests_passed, self.tests_run, self.messages_received, ctx.tick);
         }
 
-        // Pattern detection: search memory for recurring health patterns (every 5000 ticks)
+        // Pattern detection: search memory for recurring health patterns (every 30000 ticks ~5 min)
         self.pattern_scan_counter += 1;
-        if self.pattern_scan_counter >= 5000 {
+        if self.pattern_scan_counter >= 30000 {
             self.pattern_scan_counter = 0;
             serial_println!("[THOMAS] Scanning memory for recurring system patterns...");
             let search = Message::new(

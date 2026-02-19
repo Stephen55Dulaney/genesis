@@ -105,6 +105,8 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     serial_println!();
     serial_println!("[MEMORY_STORE] Loading persistent memories...");
     crate::storage::memory_store::load();
+    // Request persisted memories from the serial bridge (host disk)
+    serial_println!("[MEMORY_REQUEST]");
 
     // =========================================================================
     // AGENT SYSTEM INITIALIZATION

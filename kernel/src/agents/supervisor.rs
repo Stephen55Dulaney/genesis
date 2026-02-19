@@ -384,9 +384,9 @@ impl Supervisor {
             }
         }
         
-        // Serendipity Engine: Check for connections (every 500 ticks)
+        // Serendipity Engine: Check for connections (every 3000 ticks ~30s)
         self.serendipity_counter += 1;
-        if self.serendipity_counter >= 500 {
+        if self.serendipity_counter >= 3000 {
             self.check_serendipity();
             self.serendipity_counter = 0;
         }
@@ -394,10 +394,9 @@ impl Supervisor {
         // Daily rhythm: periodic checkpoint and status reports
         self.rhythm_counter += 1;
 
-        // Midday checkpoint (every 10,000 ticks)
-        if self.rhythm_counter % 10_000 == 0 {
+        // Midday checkpoint (every 60,000 ticks ~10 min)
+        if self.rhythm_counter % 60_000 == 0 {
             serial_println!("[CHECKPOINT] Periodic checkpoint at tick {}", self.tick);
-            serial_println!("[NOTIFY] Checkpoint at tick {}: querying all agents", self.tick);
             for agent in self.agents.iter() {
                 let progress = agent.checkpoint();
                 if !progress.is_empty() {
@@ -409,8 +408,8 @@ impl Supervisor {
             }
         }
 
-        // Status report (every 20,000 ticks)
-        if self.rhythm_counter % 20_000 == 0 {
+        // Status report (every 120,000 ticks ~20 min)
+        if self.rhythm_counter % 120_000 == 0 {
             serial_println!("[REPORT] Periodic status report at tick {}", self.tick);
             for agent in self.agents.iter() {
                 let report = agent.eod_report();
@@ -473,7 +472,6 @@ impl Supervisor {
                             self.message_queue.push(connection_msg);
                             serial_println!("[SERENDIPITY] Theme '{}' ({} entries, {} hits) — broadcasted connection",
                                 keyword, count, results.len());
-                            serial_println!("[NOTIFY] Serendipity: theme '{}' links insights across agents", keyword);
                             break; // Only one notification per cycle
                         }
                     }
@@ -602,17 +600,27 @@ impl Supervisor {
     pub fn breathe(&mut self, ambition: String) {
         serial_println!("[SUPERVISOR] Setting living ambition (the soul)...");
         serial_println!("[SUPERVISOR] \"{}\"", ambition);
-        
+
         self.living_ambition = Some(ambition.clone());
-        
+
+        // Persist the ambition to memory store so it survives reboots
+        memory_store::store_with_timestamp(
+            &alloc::format!("Living Ambition: {}", ambition),
+            MemoryKind::Observation,
+            "supervisor",
+            self.tick,
+        );
+        // Trigger a serial persist so it reaches host disk
+        memory_store::persist_to_serial();
+
         // Imprint all existing agents with the new ambition
         for agent in self.agents.iter_mut() {
             agent.imprint(&ambition);
         }
-        
+
         // Broadcast the first heartbeat immediately
         self.pulse();
-        
+
         println!();
         println!("  === LIVING AMBITION SET ===");
         println!("  \"{}\"", ambition);

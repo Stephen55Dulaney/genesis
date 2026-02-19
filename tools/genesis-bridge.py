@@ -30,6 +30,15 @@ import urllib.request
 import urllib.parse
 from pathlib import Path
 
+# ── Memory Persistence (Serial Bridge ↔ Host Disk) ────────────────────────────
+# Genesis memory store lives in RAM inside QEMU. To persist across reboots,
+# the kernel serializes entries via serial [MEMORY_PERSIST] tags, and the bridge
+# writes them to a real file on the host Mac. On boot, the kernel sends
+# [MEMORY_REQUEST] and the bridge sends the data back via [MEMORY_LOAD] tags.
+MEMORY_PERSIST_DIR = os.path.expanduser("~/.genesis")
+MEMORY_PERSIST_FILE = os.path.join(MEMORY_PERSIST_DIR, "memory.dat")
+_memory_persist_buffer = []  # accumulates [MEMORY_PERSIST] lines until [MEMORY_DONE]
+
 # macOS Python often lacks SSL certs — use unverified context if default fails
 _ssl_ctx = None
 try:
@@ -90,9 +99,9 @@ else:
     print("[!] Telegram not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.")
     print("[!] Agent notifications will only appear in serial output.")
 
-# Rate-limit: don't spam Telegram more than once per 5 seconds
+# Rate-limit: don't spam Telegram more than once per 30 seconds (reduce watch buzzing)
 _last_telegram_time = 0.0
-_TELEGRAM_MIN_INTERVAL = 5.0
+_TELEGRAM_MIN_INTERVAL = 30.0
 
 def send_telegram(text: str):
     """Send a message to the configured Telegram chat. Non-blocking, fire-and-forget."""
@@ -459,7 +468,7 @@ def call_claude(user_message):
 
             payload = json.dumps({
                 "model": ANTHROPIC_MODEL,
-                "max_tokens": 1024,
+                "max_tokens": 4096,
                 "system": system,
                 "tools": CLAUDE_TOOLS,
                 "messages": working_messages,
@@ -473,7 +482,7 @@ def call_claude(user_message):
                     "anthropic-version": "2023-06-01",
                 },
             )
-            resp = urllib.request.urlopen(req, timeout=60, context=_ssl_ctx)
+            resp = urllib.request.urlopen(req, timeout=120, context=_ssl_ctx)
             data = json.loads(resp.read().decode("utf-8"))
 
             content = data.get("content", [])
@@ -488,7 +497,10 @@ def call_claude(user_message):
                         _conversation_history.pop(0)
                 return reply
 
-            # Tool use — execute each tool and continue the loop
+            # Tool use — notify user on first iteration, then execute
+            if iteration == 0:
+                tools_used = [b["name"] for b in content if b.get("type") == "tool_use"]
+                send_telegram_reply(f"Working on it... (using {', '.join(tools_used)})")
             working_messages.append({"role": "assistant", "content": content})
 
             tool_results = []
@@ -547,30 +559,97 @@ def analyze_video_with_gemini(video_path: str, prompt: str = None) -> str:
     except Exception as e:
         return f"[ERROR] Video analysis failed: {str(e)}"
 
+def _save_memory_to_disk(lines):
+    """Write accumulated memory entries to host disk."""
+    try:
+        os.makedirs(MEMORY_PERSIST_DIR, exist_ok=True)
+        with open(MEMORY_PERSIST_FILE, "w") as f:
+            for entry_line in lines:
+                f.write(entry_line + "\n")
+        print(f"[MEMORY] Saved {len(lines)} entries to {MEMORY_PERSIST_FILE}")
+    except Exception as e:
+        print(f"[MEMORY] Save failed: {e}", file=sys.stderr)
+
+
+def _send_memory_to_genesis(process):
+    """Read persisted memory from disk and send to Genesis via serial."""
+    if not os.path.exists(MEMORY_PERSIST_FILE):
+        print("[MEMORY] No persisted memory file found — fresh start")
+        try:
+            process.stdin.write(b"[MEMORY_LOAD_DONE]\n")
+            process.stdin.flush()
+        except Exception:
+            pass
+        return
+
+    try:
+        with open(MEMORY_PERSIST_FILE, "r") as f:
+            lines = f.readlines()
+
+        count = 0
+        for line in lines:
+            line = line.strip()
+            if line:
+                msg = f"[MEMORY_LOAD] {line}\n"
+                process.stdin.write(msg.encode("utf-8"))
+                process.stdin.flush()
+                count += 1
+                time.sleep(0.01)  # small delay to avoid overwhelming serial buffer
+
+        process.stdin.write(b"[MEMORY_LOAD_DONE]\n")
+        process.stdin.flush()
+        print(f"[MEMORY] Sent {count} entries to Genesis from {MEMORY_PERSIST_FILE}")
+    except Exception as e:
+        print(f"[MEMORY] Load failed: {e}", file=sys.stderr)
+        try:
+            process.stdin.write(b"[MEMORY_LOAD_DONE]\n")
+            process.stdin.flush()
+        except Exception:
+            pass
+
+
 def listen_to_genesis(process, input_queue):
     """Read output from Genesis and put it in a queue."""
+    global _memory_persist_buffer
     buffer = ""
     for byte in iter(lambda: process.stdout.read(1), b''):
         if byte:
             try:
                 char = byte.decode('utf-8', errors='ignore')
                 buffer += char
-                
+
                 # Print to terminal
                 sys.stdout.write(char)
                 sys.stdout.flush()
-                
+
                 # Check for complete lines
                 if char == '\n':
                     line = buffer.strip()
                     buffer = ""
-                    
+
                     if line:
                         # ── Track Genesis state for Claude context ──
                         update_genesis_state(line)
 
+                        # ── Memory persistence protocol ──
+                        if "[MEMORY_PERSIST]" in line:
+                            entry_data = re.sub(r'.*\[MEMORY_PERSIST\]\s*', '', line)
+                            if entry_data:
+                                _memory_persist_buffer.append(entry_data)
+                        elif "[MEMORY_DONE]" in line:
+                            if _memory_persist_buffer:
+                                _save_memory_to_disk(_memory_persist_buffer)
+                                _memory_persist_buffer = []
+                        elif "[MEMORY_REQUEST]" in line:
+                            print("[MEMORY] Genesis requested persisted memories — sending...")
+                            threading.Thread(
+                                target=_send_memory_to_genesis,
+                                args=(process,),
+                                daemon=True,
+                            ).start()
+
                         # ── Telegram notifications ──
-                        if "[NOTIFY]" in line:
+                        elif "[NOTIFY]" in line:
                             # Strip the prefix tag for a cleaner message
                             notify_text = re.sub(r'.*\[NOTIFY\]\s*', '', line)
                             if notify_text:

@@ -288,7 +288,6 @@ impl Agent for Archimedes {
                     );
                     ctx.outbox.push(connection);
                     serial_println!("[ARCHIMEDES] Found connection between {} past entries", results.len());
-                    serial_println!("[NOTIFY] Archimedes found a connection between {} past insights", results.len());
                 }
             }
         }
@@ -323,13 +322,12 @@ impl Agent for Archimedes {
                 );
                 ctx.outbox.push(store);
                 serial_println!("[ARCHIMEDES] Saved current ambition to memory store");
-                serial_println!("[NOTIFY] Archimedes saved ambition: {}", ambition);
             }
         }
 
-        // Theme scan: search memory for keywords from current ambition (every 2000 ticks)
+        // Theme scan: search memory for keywords from current ambition (every 12000 ticks ~2 min)
         self.memory_scan_counter += 1;
-        if self.memory_scan_counter >= 2000 {
+        if self.memory_scan_counter >= 12000 {
             self.memory_scan_counter = 0;
             if let Some(ref ambition) = self.today_ambition {
                 // Extract a keyword from the ambition for theme searching

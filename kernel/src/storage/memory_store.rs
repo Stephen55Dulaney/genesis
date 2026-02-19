@@ -297,9 +297,9 @@ impl MemoryStore {
         let mut output = String::new();
 
         for entry in self.entries.values() {
-            // Escape pipes in content (replace | with \p)
-            let escaped_content = entry.content.replace('|', "\\p");
-            let escaped_source = entry.source.replace('|', "\\p");
+            // Escape pipes and newlines in content
+            let escaped_content = entry.content.replace('\\', "\\\\").replace('|', "\\p").replace('\n', "\\n").replace('\r', "\\r");
+            let escaped_source = entry.source.replace('\\', "\\\\").replace('|', "\\p").replace('\n', "\\n").replace('\r', "\\r");
 
             let keywords_str: String = entry.keywords.join(",");
 
@@ -345,10 +345,10 @@ impl MemoryStore {
                 Some(k) => k,
                 None => continue,
             };
-            let source = parts[2].replace("\\p", "|");
+            let source = parts[2].replace("\\p", "|").replace("\\r", "\r").replace("\\n", "\n").replace("\\\\", "\\");
             let timestamp = parts[3].parse::<u64>().unwrap_or(0);
             let access_count = parts[4].parse::<u64>().unwrap_or(0);
-            let content = parts[5].replace("\\p", "|");
+            let content = parts[5].replace("\\p", "|").replace("\\r", "\r").replace("\\n", "\n").replace("\\\\", "\\");
             let keywords: Vec<String> = if parts[6].is_empty() {
                 Vec::new()
             } else {
@@ -479,22 +479,63 @@ pub fn stats() -> MemoryStats {
     MEMORY.lock().stats()
 }
 
-/// Save memory to filesystem
+/// Save memory to filesystem (in-memory) and persist via serial bridge
 pub fn save() {
     use crate::storage::filesystem;
     use crate::serial_println;
 
     let data = MEMORY.lock().serialize();
-    // Ensure directory exists
+
+    // Save to in-memory filesystem (for intra-session use)
     let _ = filesystem::create_dir("/storage/memory");
     match filesystem::write_file_string(MEMORY_FILE_PATH, &data) {
-        Ok(()) => {
-            serial_println!("[MEMORY_STORE] Saved {} bytes to {}", data.len(), MEMORY_FILE_PATH);
-        }
+        Ok(()) => {}
         Err(e) => {
-            serial_println!("[MEMORY_STORE] Failed to save: {:?}", e);
+            serial_println!("[MEMORY_STORE] FS save failed: {:?}", e);
         }
     }
+
+    // Persist via serial bridge (for cross-session persistence)
+    persist_to_serial();
+}
+
+/// Persist all memory entries via serial port so the bridge can save to disk.
+///
+/// Protocol:
+///   [MEMORY_PERSIST] <serialized_line>   (one per entry)
+///   [MEMORY_DONE]                         (signals end of dump)
+///
+/// The bridge catches these tags and writes them to ~/.genesis/memory.dat
+pub fn persist_to_serial() {
+    use crate::serial_println;
+
+    let data = MEMORY.lock().serialize();
+    let count = MEMORY.lock().entries.len();
+
+    for line in data.lines() {
+        if !line.trim().is_empty() {
+            serial_println!("[MEMORY_PERSIST] {}", line);
+        }
+    }
+    serial_println!("[MEMORY_DONE]");
+    serial_println!("[MEMORY_STORE] Persisted {} entries via serial bridge", count);
+}
+
+/// Load memory from data received via serial bridge
+///
+/// Called by the shell when it receives [MEMORY_LOAD_DONE] after accumulating
+/// all [MEMORY_LOAD] lines from the bridge.
+pub fn load_from_serial_data(data: &str) {
+    use crate::serial_println;
+
+    if data.trim().is_empty() {
+        serial_println!("[MEMORY_STORE] No persisted memories from bridge (fresh start)");
+        return;
+    }
+
+    MEMORY.lock().deserialize(data);
+    let count = MEMORY.lock().entries.len();
+    serial_println!("[MEMORY_STORE] Loaded {} entries from serial bridge", count);
 }
 
 /// Load memory from filesystem
