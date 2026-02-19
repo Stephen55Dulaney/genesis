@@ -30,18 +30,16 @@ import urllib.request
 import urllib.parse
 from pathlib import Path
 
-# macOS Python often lacks SSL certs — create an unverified context as fallback
+# macOS Python often lacks SSL certs — use unverified context if default fails
+_ssl_ctx = None
 try:
-    _ssl_ctx = ssl.create_default_context()
+    _test_ctx = ssl.create_default_context()
+    urllib.request.urlopen("https://api.telegram.org", timeout=5, context=_test_ctx)
+    _ssl_ctx = _test_ctx
+    print("[*] SSL: system certificates OK")
 except Exception:
     _ssl_ctx = ssl._create_unverified_context()
-
-try:
-    urllib.request.urlopen("https://api.telegram.org", timeout=5, context=_ssl_ctx)
-except ssl.SSLCertVerificationError:
-    _ssl_ctx = ssl._create_unverified_context()
-except Exception:
-    pass  # network might be down, that's fine
+    print("[*] SSL: using unverified context (macOS Python cert issue — safe for Telegram API)")
 
 # Try to import Gemini API
 try:
