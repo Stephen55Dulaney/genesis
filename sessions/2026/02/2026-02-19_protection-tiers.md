@@ -1,0 +1,87 @@
+# Session: Protection Tiers Implementation
+
+**Date**: 2026-02-19
+**Type**: feature-implementation
+**Duration**: ~1 hour
+**Collaborators**: Stephen Dulaney, Jeff (Momentum CEO, design advice), Claude Code (Opus 4.6)
+
+---
+
+## Context
+
+Jeff advised on a 5-layer protection system for Genesis OS, where AI agents write their own code. The agents need to self-improve the system, but "we don't want them to self-improve out of existence." Stephen doesn't write Rust — the agents do — so the tiers can't be about blocking access.
+
+## What We Built
+
+### Files Created
+- `docs/PROTECTION_TIERS.md` — Full specification with Jeff's quotes, tier definitions, file mappings, ceremony checklists
+- `kernel/src/agents/protection.rs` — Rust module: ProtectionTier enum, path-to-tier mapping, ceremony checks, unit tests
+
+### Files Modified
+- `kernel/src/agents/mod.rs` — Added `pub mod protection;`, `max_write_tier()` on Agent trait
+- `kernel/src/agents/supervisor.rs` — Added `check_tier()`, `print_protection_status()`
+- `kernel/src/agents/thomas.rs` — Thomas overrides to Tier 3 (Maintained) as Guardian
+- `kernel/src/shell.rs` — Added `protection` command
+- `.genesis-manifest.json` — Added `protection_tiers` section, `tier` field per file
+
+### The Five Tiers (Final Design)
+
+| Tier | Name | Ceremony | Example |
+|------|------|----------|---------|
+| 1 | Core | Discuss risk, agree, verify build | `main.rs`, `interrupts.rs` |
+| 2 | Guarded | Talk through approach, check impact | `supervisor.rs`, bridge |
+| 3 | Maintained | Build and verify, spot-check later | Agent impls, prompts, GUI |
+| 4 | Playground | Full autonomy | `lib/`, `docs/`, sessions |
+| 5 | Sandbox | Don't touch secrets | `memory/secrets/`, `.env` |
+
+## Decisions Made
+
+1. **Tiers = ceremony, not access control.** Agents write all the Rust. Stephen architects. The question is how much we plan before coding, not who touches the keyboard.
+
+2. **Self-improvement is encouraged at every tier.** Agents should actively recommend refactors. The tiers are speed bumps proportional to stakes, not walls.
+
+3. **"Human-only" was wrong.** First draft said Core = human-only changes. Stephen corrected: "I don't know how to write Rust, so I can't maintain the core, but this has to be." Rewrote to conversation-based governance.
+
+4. **Core Change Checklist.** For Tier 1 changes: What, Why, Risk, Blast radius, Minimum change, Verification, Rollback. Not a gate — a thinking prompt.
+
+5. **Thomas gets Tier 3 autonomy.** As the Guardian/tester, Thomas can self-improve his own code, pattern detection, and test routines without discussion.
+
+## Experiments & Outcomes
+
+| Experiment | Outcome |
+|-----------|---------|
+| Build bare-metal kernel on ARM Mac | `bootloader` crate fails (expected). Cross-compile with `--target x86_64-unknown-none` works. |
+| New protection.rs module in `#![no_std]` | Compiles cleanly. Only uses `alloc::string::String` and `core::fmt`. |
+| Brace placement in supervisor.rs | First attempt put methods outside `impl` block. Compiler caught it immediately. |
+
+## What Worked
+
+- **Explore subagent for architecture analysis**: 600+ line report of entire Genesis project before writing any code. Understood all agent implementations, message types, boot sequence, bridge protocol.
+- **Jeff's framing**: "The ultimate shared service" for Core. "I let you do it, but only in this corner" for Maintained. These quotes anchored the entire design.
+- **Iterative correction**: Stephen's "I don't write Rust" feedback was exactly right. The design improved dramatically when we shifted from permission to ceremony.
+
+## What Failed
+
+- **Wrong mental model (first draft)**: Designed for a traditional team where humans write code. Genesis is the opposite — agents write everything, human architects.
+- **Brace mismatch**: Put new methods after the closing `}` of `impl Supervisor`. Trivial but cost one rebuild cycle.
+
+## What Was Learned
+
+1. **AI governance is about ceremony, not access control.** When the AI agents ARE the developers, you can't block them from code. You control the speed and scrutiny instead.
+
+2. **The architect doesn't need to write the language.** Stephen designs Genesis, Jeff advises on governance, agents write the Rust. Three different roles, three different skills. The protection system respects all three.
+
+3. **Self-improvement needs guardrails, not walls.** "We don't want them to self-improve out of existence." The answer: speed bumps (discussion, checklists, verification) proportional to stakes, not outright bans.
+
+---
+
+## Also This Session (quantum-shor)
+
+Carried over from previous context: the full IPE (Iterative Phase Estimation) implementation was completed, tested, and blogged:
+- 4 commits to quantum-skills: IPE mode, GPU guard fix, semiprime fixes, blog post
+- Factored 126,727 = 353 x 359 using 19 qubits and 8 MB RAM (vs 52 qubits / 64 PB standard)
+- Blog post: `content/blog-posts/2026-02-19_ipe-qubit-recycling-126727-in-19-qubits.md`
+
+---
+
+*Generated by /reflect on 2026-02-19*

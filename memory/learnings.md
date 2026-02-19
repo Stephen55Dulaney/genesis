@@ -66,3 +66,33 @@ Codified patterns and insights from development sessions.
 **Context**: When a feature fails in an unexpected way, investigate what the agent *tried* to do. The Telegram image bug revealed that Claude was already doing multi-model routing (calling Gemini via run_python for vision tasks) without being programmed to. Failures expose emergent behaviors.
 **Evidence**: Frog chain — 5 AI systems deep, improvised by the agent
 **Confidence**: 8/10
+
+---
+
+## [2026-02-19] Protection Tiers Implementation
+
+**Pattern**: AI governance = ceremony level, not access control
+**Context**: When AI agents are the developers (human doesn't write the language), you can't use traditional permission systems. Instead, define tiers of *ceremony* — how much discussion, risk assessment, and verification happens before a change. Higher stakes = bigger speed bump, not a wall.
+**Evidence**: First draft said "human-only" for Core. Stephen corrected: "I don't write Rust." Redesigned as conversation-based governance.
+**Confidence**: 10/10
+
+---
+
+**Pattern**: The architect doesn't need to write the language
+**Context**: Genesis OS governance design. Stephen architects, Jeff advises on governance, agents write the Rust. Three roles, three skills. The protection system must respect that the human's value is in design decisions and risk judgment, not in typing code.
+**Evidence**: [Session log](../sessions/2026/02/2026-02-19_protection-tiers.md)
+**Confidence**: 10/10
+
+---
+
+**Pattern**: Self-improvement needs guardrails, not walls
+**Context**: Any system where AI agents can modify their own code. Agents SHOULD proactively refactor and improve — that's the point. But the higher the stakes, the more they should plan first. "We don't want them to self-improve out of existence." Speed bumps (checklists, discussion, build verification) scale with blast radius.
+**Evidence**: Jeff's tiered design — "I let you do it, but only in this corner"
+**Confidence**: 9/10
+
+---
+
+**Pattern**: Explore the full architecture before designing governance
+**Context**: Before building a protection/permission system, map every file, module, and dependency. The Explore subagent generated a 600+ line architecture report that revealed Genesis had NO existing capability restrictions — critical context for knowing what to build.
+**Evidence**: Subagent exploration before protection.rs design
+**Confidence**: 9/10
