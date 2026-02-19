@@ -36,6 +36,12 @@ pub struct Archimedes {
     commitments: Vec<String>,
     /// Workspace folders created
     workspace_folders: Vec<String>,
+    /// Counter for periodic memory theme scanning
+    memory_scan_counter: u64,
+    /// Whether boot continuity check has been performed
+    boot_memory_checked: bool,
+    /// Whether current ambition has been saved to memory
+    ambition_saved: bool,
 }
 
 impl Archimedes {
@@ -59,6 +65,9 @@ impl Archimedes {
             today_ambition: None,
             commitments: Vec::new(),
             workspace_folders: Vec::new(),
+            memory_scan_counter: 0,
+            boot_memory_checked: false,
+            ambition_saved: false,
         }
     }
     
@@ -184,14 +193,14 @@ impl Agent for Archimedes {
         // Process messages
         for msg in ctx.inbox.iter() {
             self.receive(msg);
-            
+
             // Handle environment setup
             if let MessageKind::SystemEvent(SystemEvent::EnvironmentSetup) = &msg.kind {
                 serial_println!("[ARCHIMEDES] Environment setup: Organizing workspace...");
-                
+
                 // Create workspace folders
                 self.create_workspace_folders();
-                
+
                 // Send feedback about workspace preparation
                 let feedback = Message::new(
                     self.id,
@@ -202,10 +211,10 @@ impl Agent for Archimedes {
                     }),
                 );
                 ctx.outbox.push(feedback);
-                
+
                 serial_println!("[ARCHIMEDES] Workspace organized around ambition!");
             }
-            
+
             // Listen for Heartbeat (ambition DNA)
             if let MessageKind::Heartbeat(ref ambition) = &msg.kind {
                 serial_println!("[ARCHIMEDES] Received heartbeat: \"{}\"", ambition);
@@ -214,10 +223,99 @@ impl Agent for Archimedes {
                     self.today_ambition = Some(ambition.clone());
                     self.parse_ambition(ambition);
                     serial_println!("[ARCHIMEDES] Ambition updated from heartbeat");
+                    // Reset ambition_saved so the new ambition gets persisted
+                    self.ambition_saved = false;
+                    // Search memory for related past insights
+                    let first_word = ambition.split_whitespace().next().unwrap_or("ambition");
+                    let search = Message::new(
+                        self.id,
+                        None,
+                        MessageKind::MemorySearch {
+                            query: String::from(first_word),
+                        },
+                    );
+                    ctx.outbox.push(search);
+                    serial_println!("[ARCHIMEDES] Searching memory for past insights related to: {}", first_word);
+                }
+            }
+
+            // Handle MemoryResults — surface connections from past insights
+            if let MessageKind::MemoryResults { ref results } = &msg.kind {
+                if results.len() >= 2 {
+                    let first = &results[0].1;
+                    let second = &results[1].1;
+                    let connection = Message::new(
+                        self.id,
+                        None,
+                        MessageKind::Feedback(FeedbackType::Connection {
+                            from: first.clone(),
+                            to: second.clone(),
+                            pattern: String::from("Archimedes found a link between past insights"),
+                        }),
+                    );
+                    ctx.outbox.push(connection);
+                    serial_println!("[ARCHIMEDES] Found connection between {} past entries", results.len());
+                    serial_println!("[NOTIFY] Archimedes found a connection between {} past insights", results.len());
                 }
             }
         }
-        
+
+        // === Proactive behaviors ===
+
+        // Boot continuity: search memory for previous session's ambition (once)
+        if !self.boot_memory_checked {
+            self.boot_memory_checked = true;
+            serial_println!("[ARCHIMEDES] Searching memory for previous session's ambition...");
+            let search = Message::new(
+                self.id,
+                None,
+                MessageKind::MemorySearch {
+                    query: String::from("ambition today accomplish"),
+                },
+            );
+            ctx.outbox.push(search);
+        }
+
+        // Save current ambition to memory (once per ambition)
+        if !self.ambition_saved {
+            if let Some(ref ambition) = self.today_ambition {
+                self.ambition_saved = true;
+                let store = Message::new(
+                    self.id,
+                    None,
+                    MessageKind::MemoryStore {
+                        content: format!("Ambition: {}", ambition),
+                        kind: String::from("observation"),
+                    },
+                );
+                ctx.outbox.push(store);
+                serial_println!("[ARCHIMEDES] Saved current ambition to memory store");
+                serial_println!("[NOTIFY] Archimedes saved ambition: {}", ambition);
+            }
+        }
+
+        // Theme scan: search memory for keywords from current ambition (every 2000 ticks)
+        self.memory_scan_counter += 1;
+        if self.memory_scan_counter >= 2000 {
+            self.memory_scan_counter = 0;
+            if let Some(ref ambition) = self.today_ambition {
+                // Extract a keyword from the ambition for theme searching
+                let keyword = ambition.split_whitespace()
+                    .filter(|w| w.len() > 3)
+                    .next()
+                    .unwrap_or("ambition");
+                serial_println!("[ARCHIMEDES] Scanning memory for themes related to: {}", keyword);
+                let search = Message::new(
+                    self.id,
+                    None,
+                    MessageKind::MemorySearch {
+                        query: String::from(keyword),
+                    },
+                );
+                ctx.outbox.push(search);
+            }
+        }
+
         self.state
     }
     
@@ -227,6 +325,9 @@ impl Agent for Archimedes {
                 // Handled in tick()
             }
             MessageKind::Heartbeat(_) => {
+                // Handled in tick()
+            }
+            MessageKind::MemoryResults { .. } => {
                 // Handled in tick()
             }
             _ => {

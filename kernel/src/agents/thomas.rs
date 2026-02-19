@@ -59,6 +59,10 @@ pub struct Thomas {
     role: String,
     /// Counter for sending periodic Sparks
     spark_counter: u64,
+    /// Counter for periodic health observation storage
+    memory_check_counter: u64,
+    /// Counter for periodic pattern detection scans
+    pattern_scan_counter: u64,
 }
 
 impl Thomas {
@@ -86,6 +90,8 @@ impl Thomas {
             imprinted_ambition: None,
             role: String::from("Worker"),
             spark_counter: 0,
+            memory_check_counter: 0,
+            pattern_scan_counter: 0,
         }
     }
     
@@ -172,7 +178,7 @@ impl Agent for Thomas {
         // Process any incoming messages
         for msg in ctx.inbox.iter() {
             self.receive(msg);
-            
+
             // Respond to pings
             if let MessageKind::Ping = &msg.kind {
                 let response = Message::pong(self.id, msg.from);
@@ -180,7 +186,7 @@ impl Agent for Thomas {
                 self.pings_responded += 1;
                 serial_println!("[THOMAS] Sent pong to {:?}", msg.from);
             }
-            
+
             // Listen for Heartbeat (ambition DNA)
             if let MessageKind::Heartbeat(ref ambition) = &msg.kind {
                 serial_println!("[THOMAS] Received heartbeat: \"{}\"", ambition);
@@ -190,7 +196,7 @@ impl Agent for Thomas {
                     serial_println!("[THOMAS] Re-imprinted with new ambition DNA");
                 }
             }
-            
+
             // Handle test request - send Spark after tests are run
             if let MessageKind::Request { action, .. } = &msg.kind {
                 if action == "run_tests" && self.tests_passed > 0 {
@@ -204,28 +210,91 @@ impl Agent for Thomas {
                         }),
                     );
                     ctx.outbox.push(spark);
-                    serial_println!("[THOMAS] ✨ Sent Spark with test results!");
+                    serial_println!("[THOMAS] Sent Spark with test results!");
+                }
+            }
+
+            // Handle MemoryResults — detect consistent system stability
+            if let MessageKind::MemoryResults { ref results } = &msg.kind {
+                if results.len() >= 2 {
+                    let connection = Message::new(
+                        self.id,
+                        None,
+                        MessageKind::Feedback(FeedbackType::Connection {
+                            from: String::from("system health"),
+                            to: String::from("pattern detection"),
+                            pattern: format!("Consistent system stability across {} observations", results.len()),
+                        }),
+                    );
+                    ctx.outbox.push(connection);
+                    serial_println!("[THOMAS] Detected stability pattern across {} memory entries", results.len());
+                    serial_println!("[NOTIFY] Thomas detected stability pattern across {} observations", results.len());
                 }
             }
         }
-        
-        // Periodically send Sparks when testing reveals insights (every 1000 ticks = ~10 seconds)
+
+        // Periodically send enriched Sparks (every 1000 ticks = ~10 seconds)
         self.spark_counter += 1;
         if self.spark_counter >= 1000 && self.tests_passed > 0 {
-            // Send a Spark about test insights
             let spark = Message::new(
                 self.id,
-                None, // To supervisor
+                None,
                 MessageKind::Feedback(FeedbackType::Spark {
-                    content: format!("All {} tests passed - system stability confirmed", self.tests_passed),
-                    context: format!("Testing cycle {} completed", self.tests_run),
+                    content: format!("All {} tests passed - system stability confirmed ({} msgs processed, tick {})",
+                        self.tests_passed, self.messages_received, ctx.tick),
+                    context: format!("Testing cycle {} at tick {}", self.tests_run, ctx.tick),
                 }),
             );
             ctx.outbox.push(spark);
             self.spark_counter = 0;
             serial_println!("[THOMAS] Sent Spark: Test insights");
         }
-        
+
+        // Health observation: store a health snapshot in memory (every 2000 ticks)
+        self.memory_check_counter += 1;
+        if self.memory_check_counter >= 2000 {
+            self.memory_check_counter = 0;
+            let store = Message::new(
+                self.id,
+                None,
+                MessageKind::MemoryStore {
+                    content: format!("System health: {}/{} tests passed, {} msgs, tick {}",
+                        self.tests_passed, self.tests_run, self.messages_received, ctx.tick),
+                    kind: String::from("observation"),
+                },
+            );
+            ctx.outbox.push(store);
+            // Also emit a Spark about the health observation
+            let spark = Message::new(
+                self.id,
+                None,
+                MessageKind::Feedback(FeedbackType::Spark {
+                    content: format!("Health snapshot: {}/{} tests, {} msgs at tick {}",
+                        self.tests_passed, self.tests_run, self.messages_received, ctx.tick),
+                    context: String::from("Periodic health observation"),
+                }),
+            );
+            ctx.outbox.push(spark);
+            serial_println!("[THOMAS] Stored system health observation at tick {}", ctx.tick);
+            serial_println!("[NOTIFY] Thomas health check: {}/{} tests passed, {} msgs at tick {}",
+                self.tests_passed, self.tests_run, self.messages_received, ctx.tick);
+        }
+
+        // Pattern detection: search memory for recurring health patterns (every 5000 ticks)
+        self.pattern_scan_counter += 1;
+        if self.pattern_scan_counter >= 5000 {
+            self.pattern_scan_counter = 0;
+            serial_println!("[THOMAS] Scanning memory for recurring system patterns...");
+            let search = Message::new(
+                self.id,
+                None,
+                MessageKind::MemorySearch {
+                    query: String::from("system health tests"),
+                },
+            );
+            ctx.outbox.push(search);
+        }
+
         self.state
     }
     
@@ -244,6 +313,9 @@ impl Agent for Thomas {
             }
             MessageKind::Heartbeat(_) => {
                 // Already handled in tick()
+            }
+            MessageKind::MemoryResults { .. } => {
+                // Handled in tick()
             }
             MessageKind::FirstBreath { agent_name, role } => {
                 serial_println!("[THOMAS] Agent {} took first breath as {}", agent_name, role);

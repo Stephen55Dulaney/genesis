@@ -24,6 +24,9 @@ import queue
 import time
 import os
 import re
+import json
+import urllib.request
+import urllib.parse
 from pathlib import Path
 
 # Try to import Gemini API
@@ -60,6 +63,53 @@ if GEMINI_AVAILABLE:
     else:
         print("[!] GEMINI_API_KEY not set. Set it in your environment.")
         GEMINI_AVAILABLE = False
+
+# ── Telegram Notification Bridge ──────────────────────────────────────────────
+# Set these via environment variables or edit directly:
+#   TELEGRAM_BOT_TOKEN  — from @BotFather on Telegram
+#   TELEGRAM_CHAT_ID    — your personal chat ID (message @userinfobot to find it)
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_AVAILABLE = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
+
+if TELEGRAM_AVAILABLE:
+    print(f"[*] Telegram notifications enabled (chat {TELEGRAM_CHAT_ID})")
+else:
+    print("[!] Telegram not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.")
+    print("[!] Agent notifications will only appear in serial output.")
+
+# Rate-limit: don't spam Telegram more than once per 5 seconds
+_last_telegram_time = 0.0
+_TELEGRAM_MIN_INTERVAL = 5.0
+
+def send_telegram(text: str):
+    """Send a message to the configured Telegram chat. Non-blocking, fire-and-forget."""
+    global _last_telegram_time
+    if not TELEGRAM_AVAILABLE:
+        return
+
+    now = time.time()
+    if now - _last_telegram_time < _TELEGRAM_MIN_INTERVAL:
+        return  # rate-limited
+    _last_telegram_time = now
+
+    def _send():
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            payload = json.dumps({
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": text,
+                "parse_mode": "Markdown",
+                "disable_notification": False,
+            }).encode("utf-8")
+            req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=10)
+        except Exception as e:
+            print(f"[TELEGRAM] Send failed: {e}", file=sys.stderr)
+
+    threading.Thread(target=_send, daemon=True).start()
+
+# ──────────────────────────────────────────────────────────────────────────────
 
 def analyze_video_with_gemini(video_path: str, prompt: str = None) -> str:
     """Analyze a video file using Gemini multimodal capabilities."""
@@ -113,6 +163,13 @@ def listen_to_genesis(process, input_queue):
                     buffer = ""
                     
                     if line:
+                        # ── Telegram notifications ──
+                        if "[NOTIFY]" in line:
+                            # Strip the prefix tag for a cleaner message
+                            notify_text = re.sub(r'.*\[NOTIFY\]\s*', '', line)
+                            if notify_text:
+                                send_telegram(f"🤖 *Genesis*\n{notify_text}")
+
                         # Check for special bridge commands
                         if "[LLM_REQUEST] TypeWrite haiku request" in line:
                             input_queue.put({
@@ -250,6 +307,12 @@ def main():
         print("[✓] Gemini API ready")
     else:
         print("[!] Running in simulation mode (no Gemini API)")
+
+    if TELEGRAM_AVAILABLE:
+        print("[✓] Telegram notifications ready")
+        send_telegram("🚀 *Genesis is booting up*\nBridge connected, agents waking...")
+    else:
+        print("[!] Telegram notifications disabled")
     print()
     
     # Start QEMU with piped stdin/stdout

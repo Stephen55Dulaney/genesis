@@ -61,6 +61,8 @@ pub struct Supervisor {
     constellation_of_insights: Vec<FeedbackType>,
     /// Serendipity check counter (scan for connections every N ticks)
     serendipity_counter: u64,
+    /// Rhythm counter for periodic checkpoint and report cycles
+    rhythm_counter: u64,
 }
 
 impl Supervisor {
@@ -104,6 +106,7 @@ impl Supervisor {
             heartbeat_counter: 0,
             constellation_of_insights: Vec::new(),
             serendipity_counter: 0,
+            rhythm_counter: 0,
         }
     }
     
@@ -387,6 +390,38 @@ impl Supervisor {
             self.check_serendipity();
             self.serendipity_counter = 0;
         }
+
+        // Daily rhythm: periodic checkpoint and status reports
+        self.rhythm_counter += 1;
+
+        // Midday checkpoint (every 10,000 ticks)
+        if self.rhythm_counter % 10_000 == 0 {
+            serial_println!("[CHECKPOINT] Periodic checkpoint at tick {}", self.tick);
+            serial_println!("[NOTIFY] Checkpoint at tick {}: querying all agents", self.tick);
+            for agent in self.agents.iter() {
+                let progress = agent.checkpoint();
+                if !progress.is_empty() {
+                    serial_println!("[CHECKPOINT] [{}]:", agent.name());
+                    for item in &progress {
+                        serial_println!("[CHECKPOINT]   - {}", item);
+                    }
+                }
+            }
+        }
+
+        // Status report (every 20,000 ticks)
+        if self.rhythm_counter % 20_000 == 0 {
+            serial_println!("[REPORT] Periodic status report at tick {}", self.tick);
+            for agent in self.agents.iter() {
+                let report = agent.eod_report();
+                if !report.is_empty() {
+                    serial_println!("[REPORT] [{}]:", agent.name());
+                    for item in &report {
+                        serial_println!("[REPORT]   - {}", item);
+                    }
+                }
+            }
+        }
     }
     
     /// Pulse the heartbeat - broadcast the living ambition DNA
@@ -417,6 +452,39 @@ impl Supervisor {
                     let results = memory_store::search(keyword);
                     serial_println!("  - '{}' appears in {} entries ({} search hits)",
                         keyword, count, results.len());
+
+                    // Get content previews of the first two matching entries
+                    if results.len() >= 2 {
+                        let first_preview = memory_store::get(results[0].0)
+                            .map(|e| if e.content.len() > 60 {
+                                let s: String = e.content.chars().take(57).collect();
+                                alloc::format!("{}...", s)
+                            } else {
+                                e.content.clone()
+                            });
+                        let second_preview = memory_store::get(results[1].0)
+                            .map(|e| if e.content.len() > 60 {
+                                let s: String = e.content.chars().take(57).collect();
+                                alloc::format!("{}...", s)
+                            } else {
+                                e.content.clone()
+                            });
+
+                        if let (Some(from), Some(to)) = (first_preview, second_preview) {
+                            // Broadcast connection to all agents
+                            let connection_msg = Message::broadcast(
+                                self.id,
+                                MessageKind::Feedback(FeedbackType::Connection {
+                                    from: from.clone(),
+                                    to: to.clone(),
+                                    pattern: alloc::format!("Serendipity: theme '{}' links these insights", keyword),
+                                }),
+                            );
+                            self.message_queue.push(connection_msg);
+                            serial_println!("[SERENDIPITY] Broadcasted connection to agents for theme '{}'", keyword);
+                            serial_println!("[NOTIFY] Serendipity: theme '{}' links insights across agents", keyword);
+                        }
+                    }
                 }
             }
         }
