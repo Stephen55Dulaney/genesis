@@ -25,9 +25,23 @@ import time
 import os
 import re
 import json
+import ssl
 import urllib.request
 import urllib.parse
 from pathlib import Path
+
+# macOS Python often lacks SSL certs — create an unverified context as fallback
+try:
+    _ssl_ctx = ssl.create_default_context()
+except Exception:
+    _ssl_ctx = ssl._create_unverified_context()
+
+try:
+    urllib.request.urlopen("https://api.telegram.org", timeout=5, context=_ssl_ctx)
+except ssl.SSLCertVerificationError:
+    _ssl_ctx = ssl._create_unverified_context()
+except Exception:
+    pass  # network might be down, that's fine
 
 # Try to import Gemini API
 try:
@@ -103,7 +117,7 @@ def send_telegram(text: str):
                 "disable_notification": False,
             }).encode("utf-8")
             req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-            urllib.request.urlopen(req, timeout=10)
+            urllib.request.urlopen(req, timeout=10, context=_ssl_ctx)
         except Exception as e:
             print(f"[TELEGRAM] Send failed: {e}", file=sys.stderr)
 
@@ -122,7 +136,7 @@ def send_telegram_reply(text: str):
                 "disable_notification": False,
             }).encode("utf-8")
             req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-            urllib.request.urlopen(req, timeout=10)
+            urllib.request.urlopen(req, timeout=10, context=_ssl_ctx)
         except Exception as e:
             print(f"[TELEGRAM] Reply send failed: {e}", file=sys.stderr)
     threading.Thread(target=_send, daemon=True).start()
@@ -142,7 +156,7 @@ def poll_telegram(process):
                 "allowed_updates": json.dumps(["message"]),
             })
             req = urllib.request.Request(f"{url}?{params}")
-            resp = urllib.request.urlopen(req, timeout=15)
+            resp = urllib.request.urlopen(req, timeout=15, context=_ssl_ctx)
             data = json.loads(resp.read().decode("utf-8"))
             if data.get("ok") and data.get("result"):
                 for update in data["result"]:
