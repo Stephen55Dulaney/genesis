@@ -140,7 +140,7 @@ def send_telegram_reply(text: str):
     threading.Thread(target=_send, daemon=True).start()
 
 def poll_telegram(process):
-    """Poll Telegram for incoming messages and inject them into Genesis serial."""
+    """Poll Telegram for incoming messages, route through Claude, reply via Telegram."""
     if not TELEGRAM_AVAILABLE:
         return
     last_update_id = 0
@@ -165,7 +165,24 @@ def poll_telegram(process):
                     # Only accept messages from the configured chat
                     if chat_id == TELEGRAM_CHAT_ID and text:
                         print(f"[TELEGRAM] Received: {text}")
-                        # Inject into Genesis serial stdin
+
+                        # Route through Claude if available
+                        if ANTHROPIC_AVAILABLE:
+                            print(f"[CLAUDE] Processing: {text}")
+                            reply = call_claude(text)
+                            if reply:
+                                send_telegram_reply(reply)
+                                print(f"[CLAUDE] Replied: {reply[:80]}...")
+                                # Also inject summary into Genesis so agents know
+                                try:
+                                    summary = f"[TELEGRAM] {text}\n"
+                                    process.stdin.write(summary.encode("utf-8"))
+                                    process.stdin.flush()
+                                except Exception:
+                                    pass
+                                continue
+
+                        # Fallback: inject into Genesis for kernel keyword matching
                         telegram_line = f"[TELEGRAM] {text}\n"
                         try:
                             process.stdin.write(telegram_line.encode("utf-8"))
@@ -177,6 +194,129 @@ def poll_telegram(process):
             if "timed out" not in err:
                 print(f"[TELEGRAM] Poll error: {e}", file=sys.stderr)
             time.sleep(2)
+
+# ── Anthropic Claude Integration ──────────────────────────────────────────────
+# Powers the Telegram chat with Claude Sonnet 4.5 instead of keyword matching
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+ANTHROPIC_AVAILABLE = bool(ANTHROPIC_API_KEY)
+ANTHROPIC_MODEL = "claude-sonnet-4-5-20250929"
+
+if ANTHROPIC_AVAILABLE:
+    print(f"[*] Anthropic Claude ready (model: {ANTHROPIC_MODEL})")
+else:
+    print("[!] ANTHROPIC_API_KEY not set. Telegram chat will use kernel keyword matching.")
+
+# Conversation history for multi-turn context (keep last 20 messages)
+_conversation_history = []
+_MAX_HISTORY = 20
+
+# Agent system prompt — Thomas Method from the Claude Kit
+AGENT_SYSTEM_PROMPT = """You are a team of AI agents inside Genesis OS, a bare-metal operating system built by Stephen Dulaney at Quantum Dynmx.
+
+## Your Team
+- **Archimedes** (Co-Creator): Tracks daily ambitions, organizes workspaces, finds connections between ideas. Conversational and collaborative.
+- **Thomas** (Guardian): Tests all systems, monitors health, reports on stability. Methodical and precise.
+- **Sam** (Supervisor): Orchestrates all agents, manages the daily rhythm, finds serendipitous connections.
+
+## The Thomas Method (your communication style)
+- **Always concrete.** Never say "you could consider..." — say "here's the plan, here's the next step."
+- **Always forward.** Never say you're unsure or can't help. Always offer a concrete next step.
+- **Always methodical.** Break big problems into small wins.
+- **Always probing.** When issues arise, ask specific questions to isolate the real problem.
+- **Always action-oriented.** End every response with clear next steps.
+
+## Principle 0: Radical Candor
+State only what is real and verified. If something is speculative, say so. Never simulate or create illusions of capability.
+
+## How to Respond
+- You speak as the agent team collectively, but can speak as a specific agent when relevant
+- Keep responses concise (2-4 sentences typical, more for complex questions)
+- Reference the current ambition and system state when relevant
+- If Stephen asks about system health, respond as Thomas with real data
+- If Stephen asks about ambitions or goals, respond as Archimedes
+- If Stephen gives a command like "breathe [text]", acknowledge it and explain what happens
+
+## Current System State
+{system_state}
+
+## Recent Memory
+{recent_memory}
+"""
+
+def get_genesis_state(process):
+    """Build a snapshot of current Genesis state for Claude context."""
+    # We maintain this from serial output we've seen
+    return _genesis_state.get("summary", "Genesis OS is running. Agents: Archimedes (Co-Creator), Thomas (Guardian). System state: operational.")
+
+# Track Genesis state from serial output
+_genesis_state = {"summary": "Genesis OS is running. Agents: Archimedes (Co-Creator), Thomas (Guardian). System state: operational."}
+_recent_memory_items = []
+
+def update_genesis_state(line):
+    """Update our understanding of Genesis state from serial output."""
+    if "[ARCHIMEDES] Today's Ambition:" in line or "Living Ambition" in line:
+        _genesis_state["ambition"] = line.split(":", 1)[-1].strip().strip('"')
+    if "tests passed" in line.lower():
+        _genesis_state["tests"] = line.strip()
+    if "[MEMORY_STORE]" in line:
+        _recent_memory_items.append(line.strip())
+        if len(_recent_memory_items) > 10:
+            _recent_memory_items.pop(0)
+    # Rebuild summary
+    parts = ["Genesis OS is running. Agents: Archimedes (Co-Creator), Thomas (Guardian)."]
+    if "ambition" in _genesis_state:
+        parts.append(f'Current ambition: "{_genesis_state["ambition"]}"')
+    if "tests" in _genesis_state:
+        parts.append(f"Tests: {_genesis_state['tests']}")
+    _genesis_state["summary"] = " ".join(parts)
+
+def call_claude(user_message):
+    """Call Anthropic Claude API with conversation history and Genesis context."""
+    if not ANTHROPIC_AVAILABLE:
+        return None
+
+    # Build system prompt with current state
+    system_state = get_genesis_state(None)
+    recent_mem = "\n".join(_recent_memory_items[-5:]) if _recent_memory_items else "No memory entries yet."
+    system = AGENT_SYSTEM_PROMPT.format(system_state=system_state, recent_memory=recent_mem)
+
+    # Add user message to history
+    _conversation_history.append({"role": "user", "content": user_message})
+    if len(_conversation_history) > _MAX_HISTORY:
+        _conversation_history.pop(0)
+
+    try:
+        url = "https://api.anthropic.com/v1/messages"
+        payload = json.dumps({
+            "model": ANTHROPIC_MODEL,
+            "max_tokens": 300,
+            "system": system,
+            "messages": list(_conversation_history),
+        }).encode("utf-8")
+        req = urllib.request.Request(url, data=payload, headers={
+            "Content-Type": "application/json",
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+        })
+        resp = urllib.request.urlopen(req, timeout=30, context=_ssl_ctx)
+        data = json.loads(resp.read().decode("utf-8"))
+
+        # Extract text from response
+        reply = ""
+        for block in data.get("content", []):
+            if block.get("type") == "text":
+                reply += block["text"]
+
+        # Add assistant reply to history
+        if reply:
+            _conversation_history.append({"role": "assistant", "content": reply})
+            if len(_conversation_history) > _MAX_HISTORY:
+                _conversation_history.pop(0)
+
+        return reply
+    except Exception as e:
+        print(f"[CLAUDE] API error: {e}", file=sys.stderr)
+        return None
 
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -232,6 +372,9 @@ def listen_to_genesis(process, input_queue):
                     buffer = ""
                     
                     if line:
+                        # ── Track Genesis state for Claude context ──
+                        update_genesis_state(line)
+
                         # ── Telegram notifications ──
                         if "[NOTIFY]" in line:
                             # Strip the prefix tag for a cleaner message
@@ -239,8 +382,8 @@ def listen_to_genesis(process, input_queue):
                             if notify_text:
                                 send_telegram(f"🤖 *Genesis*\n{notify_text}")
 
-                        # ── Telegram replies from agents ──
-                        if "[TELEGRAM_REPLY]" in line:
+                        # ── Telegram replies from agents (only if Claude isn't handling) ──
+                        if "[TELEGRAM_REPLY]" in line and not ANTHROPIC_AVAILABLE:
                             reply_text = re.sub(r'.*\[TELEGRAM_REPLY\]\s*', '', line)
                             if reply_text:
                                 send_telegram_reply(f"💬 {reply_text}")
