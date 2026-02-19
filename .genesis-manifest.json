@@ -1,0 +1,57 @@
+{
+  "description": "Tracks code authored by Genesis agents via the Telegram-Claude bridge",
+  "convention": "Human reviews all agent-generated code before merging to main",
+  "commit_trailer": "Built-By: Genesis-Claude <genesis@quantumdynmx.com>",
+
+  "files": {
+    "lib/vision.py": {
+      "author": "genesis-claude",
+      "date": "2026-02-19",
+      "prompt": "Build vision system for robot embodiment",
+      "status": "reviewed"
+    },
+    "lib/gemini_vision.py": {
+      "author": "genesis-claude",
+      "date": "2026-02-19",
+      "prompt": "Build Gemini vision integration",
+      "status": "reviewed",
+      "notes": "Hardcoded API key removed by human reviewer"
+    },
+    "lib/robot_bridge.py": {
+      "author": "genesis-claude",
+      "date": "2026-02-19",
+      "prompt": "Build robot bridge server/client for Genesis-to-hardware communication",
+      "status": "reviewed"
+    },
+    "docs/robot_spec.md": {
+      "author": "genesis-claude",
+      "date": "2026-02-19",
+      "prompt": "Design robot integration specification",
+      "status": "reviewed"
+    },
+    "docs/MEMORY_SYSTEM.md": {
+      "author": "genesis-claude",
+      "date": "2026-02-19",
+      "prompt": "Document the memory persistence system",
+      "status": "reviewed"
+    },
+    "docs/specs/robot_integration.md": {
+      "author": "genesis-claude",
+      "date": "2026-02-19",
+      "prompt": "Robot integration spec (alternate version)",
+      "status": "reviewed"
+    },
+    "tools/genesis_memory_persist.py": {
+      "author": "genesis-claude",
+      "date": "2026-02-19",
+      "prompt": "Build two-layer memory persistence (local disk + GitHub backup)",
+      "status": "reviewed"
+    },
+    "memory/": {
+      "author": "genesis-claude",
+      "date": "2026-02-19",
+      "prompt": "Auto-generated memory checkpoints and state files",
+      "status": "auto-generated"
+    }
+  }
+}
