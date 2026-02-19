@@ -39,6 +39,14 @@ MEMORY_PERSIST_DIR = os.path.expanduser("~/.genesis")
 MEMORY_PERSIST_FILE = os.path.join(MEMORY_PERSIST_DIR, "memory.dat")
 _memory_persist_buffer = []  # accumulates [MEMORY_PERSIST] lines until [MEMORY_DONE]
 
+# ── Claude Code Inbox/Outbox (Terminal ↔ Bridge Communication) ───────────────
+# Claude Code (running in terminal) drops JSON files into ~/.genesis/inbox/
+# The bridge picks them up, routes through Claude/Genesis, writes responses to outbox.
+INBOX_DIR = os.path.expanduser("~/.genesis/inbox")
+OUTBOX_DIR = os.path.expanduser("~/.genesis/outbox")
+os.makedirs(INBOX_DIR, exist_ok=True)
+os.makedirs(OUTBOX_DIR, exist_ok=True)
+
 # macOS Python often lacks SSL certs — use unverified context if default fails
 _ssl_ctx = None
 try:
@@ -270,6 +278,76 @@ def poll_telegram(process):
             if "timed out" not in err:
                 print(f"[TELEGRAM] Poll error: {e}", file=sys.stderr)
             time.sleep(2)
+
+
+def poll_inbox(process):
+    """Poll ~/.genesis/inbox/ for messages from Claude Code. Route and respond."""
+    print(f"[INBOX] Watching {INBOX_DIR} for messages from Claude Code...")
+    while True:
+        try:
+            files = sorted(Path(INBOX_DIR).glob("*.json"))
+            for f in files:
+                try:
+                    msg = json.loads(f.read_text())
+                except (json.JSONDecodeError, OSError) as e:
+                    print(f"[INBOX] Bad file {f.name}: {e}")
+                    f.unlink(missing_ok=True)
+                    continue
+
+                msg_id = msg.get("id", f.stem)
+                sender = msg.get("from", "claude-code")
+                target = msg.get("to", "claude")  # "claude", "genesis", "telegram"
+                text = msg.get("message", "")
+                print(f"[INBOX] Message {msg_id} from {sender} to {target}: {text[:80]}")
+
+                reply_text = None
+
+                if target == "claude" and ANTHROPIC_AVAILABLE:
+                    # Route through Claude (same as Telegram messages)
+                    reply_text = call_claude(f"[From Claude Code terminal] {text}")
+
+                elif target == "genesis":
+                    # Inject directly into Genesis serial (kernel agents see it)
+                    try:
+                        serial_line = f"[INBOX] {text}\n"
+                        process.stdin.write(serial_line.encode("utf-8"))
+                        process.stdin.flush()
+                        reply_text = f"Injected into Genesis serial: {text[:100]}"
+                    except Exception as e:
+                        reply_text = f"Error injecting to Genesis: {e}"
+
+                elif target == "telegram":
+                    # Send directly to Telegram chat
+                    send_telegram_reply(text)
+                    reply_text = f"Sent to Telegram: {text[:100]}"
+
+                else:
+                    reply_text = f"Unknown target '{target}'. Use 'claude', 'genesis', or 'telegram'."
+
+                # Write response to outbox
+                response = {
+                    "id": msg_id,
+                    "in_reply_to": msg_id,
+                    "from": target,
+                    "message": reply_text or "(no response)",
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                }
+                outbox_path = Path(OUTBOX_DIR) / f"resp_{msg_id}.json"
+                outbox_path.write_text(json.dumps(response, indent=2))
+                print(f"[INBOX] Response written to {outbox_path.name}")
+
+                # Also forward reply to Telegram so Stephen sees it
+                if target == "claude" and reply_text:
+                    send_telegram_reply(f"🖥️ *Claude Code asked:* {text[:200]}\n\n{reply_text[:3000]}")
+
+                # Remove processed inbox file
+                f.unlink(missing_ok=True)
+
+        except Exception as e:
+            print(f"[INBOX] Error: {e}", file=sys.stderr)
+
+        time.sleep(5)  # Check inbox every 5 seconds
+
 
 # ── Anthropic Claude Integration ──────────────────────────────────────────────
 # Powers the Telegram chat with Claude Sonnet 4.5 instead of keyword matching
@@ -924,6 +1002,9 @@ def main():
         send_telegram("🚀 *Genesis is booting up*\nBridge connected, agents waking...")
     else:
         print("[!] Telegram notifications disabled")
+
+    print(f"[✓] Claude Code inbox: {INBOX_DIR}")
+    print(f"[✓] Claude Code outbox: {OUTBOX_DIR}")
     print()
     
     # Start QEMU with piped stdin/stdout
@@ -956,11 +1037,19 @@ def main():
         daemon=True
     )
 
+    inbox_thread = threading.Thread(
+        target=poll_inbox,
+        args=(process,),
+        daemon=True
+    )
+
     listener_thread.start()
     llm_thread.start()
     telegram_thread.start()
+    inbox_thread.start()
 
     print("[*] Bridge active. Starting QEMU with Genesis...")
+    print(f"[*] Claude Code inbox: {INBOX_DIR}")
     print("[*] You should see Genesis boot output below.")
     print("[*] Wait for 'genesis>' prompt, then type commands.")
     print("[*] Try: help, haiku, test, insights")
