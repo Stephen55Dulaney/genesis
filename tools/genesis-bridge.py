@@ -109,6 +109,63 @@ def send_telegram(text: str):
 
     threading.Thread(target=_send, daemon=True).start()
 
+def send_telegram_reply(text: str):
+    """Send a reply to Telegram without rate-limiting (for direct agent responses)."""
+    if not TELEGRAM_AVAILABLE:
+        return
+    def _send():
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            payload = json.dumps({
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": text,
+                "disable_notification": False,
+            }).encode("utf-8")
+            req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+            urllib.request.urlopen(req, timeout=10)
+        except Exception as e:
+            print(f"[TELEGRAM] Reply send failed: {e}", file=sys.stderr)
+    threading.Thread(target=_send, daemon=True).start()
+
+def poll_telegram(process):
+    """Poll Telegram for incoming messages and inject them into Genesis serial."""
+    if not TELEGRAM_AVAILABLE:
+        return
+    last_update_id = 0
+    print("[TELEGRAM] Polling for incoming messages...")
+    while True:
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
+            params = urllib.parse.urlencode({
+                "offset": last_update_id + 1,
+                "timeout": 10,
+                "allowed_updates": json.dumps(["message"]),
+            })
+            req = urllib.request.Request(f"{url}?{params}")
+            resp = urllib.request.urlopen(req, timeout=15)
+            data = json.loads(resp.read().decode("utf-8"))
+            if data.get("ok") and data.get("result"):
+                for update in data["result"]:
+                    last_update_id = update["update_id"]
+                    msg = update.get("message", {})
+                    chat_id = str(msg.get("chat", {}).get("id", ""))
+                    text = msg.get("text", "")
+                    # Only accept messages from the configured chat
+                    if chat_id == TELEGRAM_CHAT_ID and text:
+                        print(f"[TELEGRAM] Received: {text}")
+                        # Inject into Genesis serial stdin
+                        telegram_line = f"[TELEGRAM] {text}\n"
+                        try:
+                            process.stdin.write(telegram_line.encode("utf-8"))
+                            process.stdin.flush()
+                        except Exception as e:
+                            print(f"[TELEGRAM] Inject failed: {e}", file=sys.stderr)
+        except Exception as e:
+            err = str(e)
+            if "timed out" not in err:
+                print(f"[TELEGRAM] Poll error: {e}", file=sys.stderr)
+            time.sleep(2)
+
 # ──────────────────────────────────────────────────────────────────────────────
 
 def analyze_video_with_gemini(video_path: str, prompt: str = None) -> str:
@@ -169,6 +226,12 @@ def listen_to_genesis(process, input_queue):
                             notify_text = re.sub(r'.*\[NOTIFY\]\s*', '', line)
                             if notify_text:
                                 send_telegram(f"🤖 *Genesis*\n{notify_text}")
+
+                        # ── Telegram replies from agents ──
+                        if "[TELEGRAM_REPLY]" in line:
+                            reply_text = re.sub(r'.*\[TELEGRAM_REPLY\]\s*', '', line)
+                            if reply_text:
+                                send_telegram_reply(f"💬 {reply_text}")
 
                         # Check for special bridge commands
                         if "[LLM_REQUEST] TypeWrite haiku request" in line:
@@ -339,9 +402,16 @@ def main():
         daemon=True
     )
     
+    telegram_thread = threading.Thread(
+        target=poll_telegram,
+        args=(process,),
+        daemon=True
+    )
+
     listener_thread.start()
     llm_thread.start()
-    
+    telegram_thread.start()
+
     print("[*] Bridge active. Starting QEMU with Genesis...")
     print("[*] You should see Genesis boot output below.")
     print("[*] Wait for 'genesis>' prompt, then type commands.")

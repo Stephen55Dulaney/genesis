@@ -214,6 +214,22 @@ impl Agent for Thomas {
                 }
             }
 
+            // Handle Telegram messages — respond with system health info
+            if let MessageKind::Text(ref text) = &msg.kind {
+                if let Some(telegram_msg) = text.strip_prefix("TELEGRAM: ") {
+                    // Thomas only responds to health/test/system questions
+                    let msg_lower: String = telegram_msg.chars().map(|c| match c {
+                        'A'..='Z' => (c as u8 + 32) as char,
+                        _ => c,
+                    }).collect();
+                    if msg_lower.contains("test") || msg_lower.contains("health") || msg_lower.contains("system") {
+                        let reply = format!("Thomas here: {}/{} tests passed, {} messages processed. System is stable.",
+                            self.tests_passed, self.tests_run, self.messages_received);
+                        serial_println!("[TELEGRAM_REPLY] {}", reply);
+                    }
+                }
+            }
+
             // Handle MemoryResults — detect consistent system stability
             if let MessageKind::MemoryResults { ref results } = &msg.kind {
                 if results.len() >= 2 {

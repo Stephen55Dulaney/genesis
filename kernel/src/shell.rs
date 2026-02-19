@@ -119,6 +119,20 @@ impl Shell {
                     }
                     self.buffer.clear();
                     // No prompt after LLM lines — more will follow
+                } else if self.buffer.starts_with("[TELEGRAM]") {
+                    // Incoming Telegram message from user via bridge
+                    let message = self.buffer.strip_prefix("[TELEGRAM]").unwrap_or(&self.buffer).trim();
+                    if !message.is_empty() {
+                        shell_print!("  [Telegram] {}", message);
+                        // Route to agents as a Text message so they can respond
+                        supervisor.broadcast(crate::agents::message::MessageKind::Text(
+                            format!("TELEGRAM: {}", message),
+                        ));
+                    }
+                    self.buffer.clear();
+                } else if self.buffer.starts_with("[TELEGRAM_REPLY]") {
+                    // Outgoing reply from agent — don't display locally, bridge handles it
+                    self.buffer.clear();
                 } else {
                     // Normal command execution
                     self.execute_command(supervisor);
@@ -143,7 +157,7 @@ impl Shell {
                 if self.buffer.len() < MAX_COMMAND_LEN {
                     self.buffer.push(c);
                     // Don't echo bridge responses (they'll be displayed clean on Enter)
-                    if !self.buffer.starts_with("[LLM_") {
+                    if !self.buffer.starts_with("[LLM_") && !self.buffer.starts_with("[TELEGRAM") {
                         print!("{}", c);
                         crate::serial_print!("{}", c); // Also to serial
                     }

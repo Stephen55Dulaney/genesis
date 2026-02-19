@@ -239,6 +239,39 @@ impl Agent for Archimedes {
                 }
             }
 
+            // Handle Telegram messages — respond as conversational partner
+            if let MessageKind::Text(ref text) = &msg.kind {
+                if let Some(telegram_msg) = text.strip_prefix("TELEGRAM: ") {
+                    serial_println!("[ARCHIMEDES] Telegram message received: {}", telegram_msg);
+                    // Build a contextual reply
+                    let reply = if let Some(ref ambition) = self.today_ambition {
+                        if telegram_msg.contains("ambition") || telegram_msg.contains("goal") || telegram_msg.contains("today") {
+                            format!("Our ambition today: \"{}\". {} commitments tracked. What would you like to focus on?",
+                                ambition, self.commitments.len())
+                        } else if telegram_msg.contains("status") || telegram_msg.contains("how") {
+                            format!("All systems running. Ambition: \"{}\". {} workspace folders active, {} commitments.",
+                                ambition, self.workspace_folders.len(), self.commitments.len())
+                        } else {
+                            format!("I hear you: \"{}\". I'm working on our ambition: \"{}\". How can I help?",
+                                telegram_msg, ambition)
+                        }
+                    } else {
+                        format!("Hello from Genesis! I received: \"{}\". No ambition set yet — use 'breathe' in the shell to set one.", telegram_msg)
+                    };
+                    serial_println!("[TELEGRAM_REPLY] {}", reply);
+                    // Also store the conversation in memory
+                    let store = Message::new(
+                        self.id,
+                        None,
+                        MessageKind::MemoryStore {
+                            content: format!("Telegram conversation: user said '{}', replied '{}'", telegram_msg, reply),
+                            kind: String::from("observation"),
+                        },
+                    );
+                    ctx.outbox.push(store);
+                }
+            }
+
             // Handle MemoryResults — surface connections from past insights
             if let MessageKind::MemoryResults { ref results } = &msg.kind {
                 if results.len() >= 2 {
