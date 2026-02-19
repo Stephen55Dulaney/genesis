@@ -3,55 +3,85 @@
   "convention": "Human reviews all agent-generated code before merging to main",
   "commit_trailer": "Built-By: Genesis-Claude <genesis@quantumdynmx.com>",
 
+  "protection_tiers": {
+    "1_core": "Human-only. Boot, memory, interrupts, Agent trait, build config.",
+    "2_guarded": "Agent proposals require human review before merge.",
+    "3_maintained": "Agents modify with Thomas validation. Human spot-checks.",
+    "4_playground": "Full agent autonomy. Provenance tracked via this manifest.",
+    "5_sandbox": "Isolated. Secrets and credentials. No agent access."
+  },
+
   "files": {
     "lib/vision.py": {
       "author": "genesis-claude",
       "date": "2026-02-19",
       "prompt": "Build vision system for robot embodiment",
-      "status": "reviewed"
+      "status": "reviewed",
+      "tier": 4
     },
     "lib/gemini_vision.py": {
       "author": "genesis-claude",
       "date": "2026-02-19",
       "prompt": "Build Gemini vision integration",
       "status": "reviewed",
-      "notes": "Hardcoded API key removed by human reviewer"
+      "notes": "Hardcoded API key removed by human reviewer",
+      "tier": 4
     },
     "lib/robot_bridge.py": {
       "author": "genesis-claude",
       "date": "2026-02-19",
       "prompt": "Build robot bridge server/client for Genesis-to-hardware communication",
-      "status": "reviewed"
+      "status": "reviewed",
+      "tier": 4
     },
     "docs/robot_spec.md": {
       "author": "genesis-claude",
       "date": "2026-02-19",
       "prompt": "Design robot integration specification",
-      "status": "reviewed"
+      "status": "reviewed",
+      "tier": 4
     },
     "docs/MEMORY_SYSTEM.md": {
       "author": "genesis-claude",
       "date": "2026-02-19",
       "prompt": "Document the memory persistence system",
-      "status": "reviewed"
+      "status": "reviewed",
+      "tier": 4
     },
     "docs/specs/robot_integration.md": {
       "author": "genesis-claude",
       "date": "2026-02-19",
       "prompt": "Robot integration spec (alternate version)",
-      "status": "reviewed"
+      "status": "reviewed",
+      "tier": 4
     },
     "tools/genesis_memory_persist.py": {
       "author": "genesis-claude",
       "date": "2026-02-19",
       "prompt": "Build two-layer memory persistence (local disk + GitHub backup)",
-      "status": "reviewed"
+      "status": "reviewed",
+      "tier": 3
     },
     "memory/": {
       "author": "genesis-claude",
       "date": "2026-02-19",
       "prompt": "Auto-generated memory checkpoints and state files",
-      "status": "auto-generated"
+      "status": "auto-generated",
+      "tier": 4
+    },
+    "docs/PROTECTION_TIERS.md": {
+      "author": "human+claude-code",
+      "date": "2026-02-19",
+      "prompt": "5-tier protection system design (Jeff collaboration)",
+      "status": "reviewed",
+      "tier": 4
+    },
+    "kernel/src/agents/protection.rs": {
+      "author": "human+claude-code",
+      "date": "2026-02-19",
+      "prompt": "Protection tier enforcement module",
+      "status": "reviewed",
+      "tier": 1
     }
   }
 }

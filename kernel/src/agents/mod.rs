@@ -53,6 +53,7 @@ pub mod supervisor;
 pub mod thomas;
 pub mod archimedes;
 pub mod prompts;
+pub mod protection;
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -157,6 +158,23 @@ pub trait Agent: Send + Debug {
         // Default: no reflection
     }
     
+    // =========================================================================
+    // Protection Tier & Self-Improvement
+    // =========================================================================
+
+    /// The highest tier this agent autonomously self-improves at.
+    ///
+    /// Agents are ENCOURAGED to propose improvements at every tier — the
+    /// system should get better over time. This method returns the tier
+    /// where the agent can make changes without discussion. Higher tiers
+    /// (lower numbers) require conversation with Stephen first.
+    ///
+    /// Default: Tier 4 (Playground) — experiment freely.
+    /// Thomas overrides to Tier 3 (Maintained) — can refactor his own code.
+    fn max_write_tier(&self) -> protection::ProtectionTier {
+        protection::ProtectionTier::Playground
+    }
+
     // =========================================================================
     // Genesis Protocol - The Soul-Body Connection
     // =========================================================================

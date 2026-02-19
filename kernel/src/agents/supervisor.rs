@@ -37,6 +37,7 @@ use super::{Agent, AgentId, AgentContext};
 use super::message::{Message, MessageKind, SystemEvent, FeedbackType};
 use super::prompts::{library, evolution, character_ids};
 use super::prompts::academy;
+use super::protection::{self, ProtectionTier};
 use crate::{println, serial_println};
 use crate::storage::memory_store::{self, MemoryKind};
 
@@ -635,6 +636,41 @@ impl Supervisor {
     /// Get the constellation of insights
     pub fn get_insights(&self) -> &[FeedbackType] {
         &self.constellation_of_insights
+    }
+
+    /// Check the ceremony required for a change to a file.
+    /// Returns the TierCheck with proceed flag and required ceremony.
+    /// Only Sandbox files are actually blocked — everything else proceeds
+    /// with appropriate ceremony (discussion, verification, etc.).
+    pub fn check_tier(&self, agent_name: &str, path: &str, change: protection::ChangeKind) -> protection::TierCheck {
+        let result = protection::check(path, change);
+        if !result.proceed {
+            serial_println!("[PROTECTION] BLOCKED: Agent '{}' — {} on '{}' ({})",
+                agent_name, result.ceremony, path, result.tier);
+        } else if result.tier.requires_discussion() {
+            serial_println!("[PROTECTION] NOTICE: Agent '{}' changing {} ({}) — {}",
+                agent_name, path, result.tier, result.ceremony);
+        }
+        result
+    }
+
+    /// Print protection tier status for all registered paths.
+    pub fn print_protection_status(&self) {
+        protection::print_tier_summary();
+
+        // Show each agent's self-improvement domain
+        serial_println!();
+        serial_println!("  === AGENT ROLES ===");
+        println!();
+        println!("  === AGENT ROLES ===");
+        for agent in &self.agents {
+            let tier = agent.max_write_tier();
+            serial_println!("  {} {} — self-improves up to: {} ({})",
+                tier.badge(), agent.name(), tier.name(), tier.ceremony());
+            println!("  {} {} — self-improves up to: {} ({})",
+                tier.badge(), agent.name(), tier.name(), tier.ceremony());
+        }
+        serial_println!();
     }
 }
 

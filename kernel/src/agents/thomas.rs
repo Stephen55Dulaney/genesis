@@ -34,6 +34,7 @@ use super::{Agent, AgentId, AgentState, AgentContext};
 use super::message::{Message, MessageKind, FeedbackType};
 use super::prompts::{character_ids, CertificationLevel};
 use super::prompts::library::with_library;
+use super::protection::ProtectionTier;
 use crate::serial_println;
 
 /// Thomas - The Test Agent
@@ -406,8 +407,13 @@ impl Agent for Thomas {
         }
     }
     
+    // Protection Tier — Thomas is the Guardian, gets Tier 3 access
+    fn max_write_tier(&self) -> ProtectionTier {
+        ProtectionTier::Maintained
+    }
+
     // Genesis Protocol
-    
+
     fn imprint(&mut self, ambition: &str) {
         serial_println!("[THOMAS] Imprinting with ambition DNA...");
         self.imprinted_ambition = Some(String::from(ambition));

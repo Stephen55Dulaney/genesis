@@ -220,6 +220,7 @@ impl Shell {
                 shell_print!("  graphics  - Test graphics rendering (draw test pattern)");
                 shell_print!("  archimedes - Talk to Archimedes (Daily Ambition Agent)");
                 shell_print!("  desktop   - Show split-screen desktop (Conversation + Ambition)");
+                shell_print!("  protection - Show protection tier summary and agent access levels");
                 shell_print!("  memory search <q> - Search memory for matching entries");
                 shell_print!("  memory list   - Show recent memory entries (last 10)");
                 shell_print!("  memory stats  - Show memory store statistics");
@@ -339,6 +340,9 @@ impl Shell {
             }
             "academy" => {
                 supervisor.print_academy_status();
+            }
+            "protection" => {
+                supervisor.print_protection_status();
             }
             "ping" => {
                 shell_print!("Pinging all agents...");
