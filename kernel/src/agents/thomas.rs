@@ -407,6 +407,35 @@ impl Agent for Thomas {
         }
     }
     
+    // Journal — "As the Kernel Turns"
+    fn journal_entry(&self, _tick: u64) -> Option<String> {
+        let ambition_line = if let Some(ref ambition) = self.imprinted_ambition {
+            format!(
+                "Stephen's ambition echoes through the heartbeat: \"{}\". I don't fully understand all of it, but I tested everything I could reach and it all holds.",
+                ambition
+            )
+        } else {
+            String::from("No ambition has been imprinted yet. I test anyway. That's what I do.")
+        };
+
+        let stability = if self.tests_passed == self.tests_run && self.tests_run > 0 {
+            "The system is stable. For now."
+        } else if self.tests_run == 0 {
+            "No tests run yet. That makes me nervous."
+        } else {
+            "Some tests failed. I don't like that. I'll keep watching."
+        };
+
+        Some(format!(
+            "I ran my tests again today. {} out of {} passed — memory allocation, string creation, and the eternal question of six times seven. It's always 42. I find comfort in that. {} {} messages processed. {}",
+            self.tests_passed,
+            self.tests_run,
+            ambition_line,
+            self.messages_received,
+            stability,
+        ))
+    }
+
     // Protection Tier — Thomas is the Guardian, gets Tier 3 access
     fn max_write_tier(&self) -> ProtectionTier {
         ProtectionTier::Maintained

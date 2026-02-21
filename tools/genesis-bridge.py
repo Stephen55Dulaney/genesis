@@ -39,6 +39,20 @@ MEMORY_PERSIST_DIR = os.path.expanduser("~/.genesis")
 MEMORY_PERSIST_FILE = os.path.join(MEMORY_PERSIST_DIR, "memory.dat")
 _memory_persist_buffer = []  # accumulates [MEMORY_PERSIST] lines until [MEMORY_DONE]
 
+# ── Agent Journal ("As the Kernel Turns") ──────────────────────────────────
+# Agents emit [JOURNAL] lines via serial. The bridge captures them and writes
+# to daily markdown files. Optionally sends to Telegram.
+JOURNAL_DIR = os.path.expanduser("~/.genesis/journal")
+os.makedirs(JOURNAL_DIR, exist_ok=True)
+_journal_buffer = []  # accumulates [JOURNAL] lines until [JOURNAL_DONE]
+
+# ── Daily Ambition Persistence ─────────────────────────────────────────────
+# When the kernel sets an ambition via `breathe`, it emits [AMBITION_SET].
+# The bridge saves to daily files so ambitions survive reboots and accumulate
+# over time (like Stephen's daily ambition practice since August 2025).
+AMBITION_DIR = os.path.expanduser("~/.genesis/ambitions")
+os.makedirs(AMBITION_DIR, exist_ok=True)
+
 # ── Claude Code Inbox/Outbox (Terminal ↔ Bridge Communication) ───────────────
 # Claude Code (running in terminal) drops JSON files into ~/.genesis/inbox/
 # The bridge picks them up, routes through Claude/Genesis, writes responses to outbox.
@@ -364,7 +378,8 @@ else:
 _conversation_history = []
 _MAX_HISTORY = 20
 
-# Agent system prompt — Thomas Method from the Claude Kit
+# Agent system prompt — STATIC (no dynamic format placeholders — enables prompt caching)
+# Dynamic state/memory are injected as system-reminder messages per the caching best practices.
 AGENT_SYSTEM_PROMPT = """You are a team of AI agents inside Genesis OS, a bare-metal operating system built by Stephen Dulaney at Quantum Dynmx.
 
 ## Your Team
@@ -421,11 +436,21 @@ When building code, ALWAYS follow this cycle:
 - If Stephen gives a command like "breathe [text]", acknowledge it and explain what happens
 - When building, show the micro-task cycle: what you're building, Thomas's validation, TypeWrite's documentation
 
-## Current System State
-{system_state}
+## Your Senses
+- **Eyes**: EMEET S600 camera. Use the `capture_snapshot` tool to see what's in front of the camera. Use `send_telegram_photo` to show Stephen what you captured.
+- **Imagination**: Gemini Imagen 4.0. Use the `generate_image` tool to visualize concepts, create diagrams, or dream in pictures.
+- **Ears**: USB microphone (via the voice agent, when running).
+- **Voice**: macOS TTS via `say -v Daniel` (via the voice agent, when running).
 
-## Recent Memory
-{recent_memory}
+## Secrets & Environment
+API keys are loaded into the environment. You do NOT need to ask Stephen for keys — they are available:
+- `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` — already configured, used by the bridge automatically
+- `ANTHROPIC_API_KEY` — your reasoning engine
+- `GEMINI_API_KEY` — for vision analysis (used by capture_snapshot automatically)
+Never print or expose these keys. They're handled for you.
+
+## Context
+System state and recent memory are provided via <system-reminder> tags in the conversation messages.
 """
 
 def get_genesis_state(process):
@@ -525,11 +550,48 @@ CLAUDE_TOOLS = [
                 "path": {"type": "string", "description": "Directory path to list"}
             },
             "required": ["path"]
-        }
+        },
+    },
+    {
+        "name": "capture_snapshot",
+        "description": "Capture a photo from the EMEET S600 camera (Genesis's eyes). Returns a description of what's in the image via Gemini vision. Use this when someone asks you to look at something, count objects, or describe what you see.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "What to look for or describe in the image (e.g., 'How many fingers?', 'What objects are on the table?')"}
+            },
+            "required": ["prompt"]
+        },
+    },
+    {
+        "name": "generate_image",
+        "description": "Generate an image from a text prompt using Gemini Imagen 4.0. Returns the path to the saved image. Use this to visualize concepts, create diagrams, or dream in pictures.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "Text description of the image to generate"},
+                "output_filename": {"type": "string", "description": "Optional filename (will be saved in generated_images/ directory)"}
+            },
+            "required": ["prompt"]
+        },
+        "cache_control": {"type": "ephemeral"}
+    },
+    {
+        "name": "send_telegram_photo",
+        "description": "Send a photo to the Telegram chat. Use this to show Stephen what you captured or to share visual information.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "image_path": {"type": "string", "description": "Absolute path to the image file to send"},
+                "caption": {"type": "string", "description": "Optional caption for the photo"}
+            },
+            "required": ["image_path"]
+        },
+        "cache_control": {"type": "ephemeral"}
     },
 ]
 
-_MAX_TOOL_ITERATIONS = 10
+_MAX_TOOL_ITERATIONS = 25  # Was 10 — too low for multi-step builds (each step ≈ 2-3 tool calls)
 
 
 def _strip_html(html):
@@ -613,6 +675,88 @@ def execute_tool(name, tool_input):
                     lines.append(f"  {e}  ({os.path.getsize(full)} bytes)")
             return "\n".join(lines) or "(empty directory)"
 
+        elif name == "capture_snapshot":
+            import cv2 as _cv2
+            prompt = tool_input.get("prompt", "Describe what you see in this image.")
+            snap_path = "/tmp/genesis_snapshot.jpg"
+            # Open camera, capture, release immediately (don't hold the device)
+            # EMEET S600 (index 1) produces dark images via OpenCV — use FaceTime (index 0)
+            cap = _cv2.VideoCapture(0)
+            if not cap.isOpened():
+                cap = _cv2.VideoCapture(2)  # iPhone Continuity Camera fallback
+            if not cap.isOpened():
+                return "Error: No camera available. Could not open EMEET S600 (index 1) or FaceTime (index 0)."
+            # Warm up — auto-exposure needs several frames to settle
+            for _ in range(10):
+                cap.read()
+                time.sleep(0.05)
+            ret, frame = cap.read()
+            cap.release()
+            if not ret:
+                return "Error: Camera opened but frame capture failed."
+            _cv2.imwrite(snap_path, frame)
+            file_size = os.path.getsize(snap_path)
+            print(f"[SNAPSHOT] Captured {snap_path} ({file_size} bytes)")
+
+            # Send to Gemini for vision analysis
+            if GEMINI_AVAILABLE:
+                import google.generativeai as _genai
+                uploaded = _genai.upload_file(path=snap_path)
+                response = model.generate_content([prompt, uploaded])
+                vision_result = response.text.strip()
+                print(f"[SNAPSHOT] Gemini says: {vision_result[:100]}...")
+                return f"Snapshot saved to {snap_path} ({file_size} bytes).\n\nGemini vision analysis:\n{vision_result}"
+            else:
+                return f"Snapshot saved to {snap_path} ({file_size} bytes). Gemini not available for vision analysis."
+
+        elif name == "generate_image":
+            import sys
+            sys.path.insert(0, "/Users/stephendulaney/genesis/lib")
+            from image_generation import generate_image as _gen_img
+            prompt = tool_input["prompt"]
+            output_filename = tool_input.get("output_filename", None)
+            try:
+                result_path = _gen_img(prompt, output_filename=output_filename)
+                print(f"[GENERATE_IMAGE] Created: {result_path}")
+                return f"Image generated successfully: {result_path}\nPrompt: {prompt}"
+            except Exception as e:
+                return f"Error generating image: {e}"
+
+        elif name == "send_telegram_photo":
+            image_path = tool_input["image_path"]
+            caption = tool_input.get("caption", "")
+            if not os.path.exists(image_path):
+                return f"Error: File not found: {image_path}"
+            if not TELEGRAM_AVAILABLE:
+                return "Error: Telegram not configured (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set)."
+            # Use multipart form upload for sendPhoto
+            import mimetypes
+            boundary = "----GenesisPhotoUpload"
+            mime_type = mimetypes.guess_type(image_path)[0] or "image/jpeg"
+            filename = os.path.basename(image_path)
+            with open(image_path, "rb") as f:
+                image_bytes = f.read()
+            body = (
+                f"--{boundary}\r\n"
+                f'Content-Disposition: form-data; name="chat_id"\r\n\r\n{TELEGRAM_CHAT_ID}\r\n'
+                f"--{boundary}\r\n"
+                f'Content-Disposition: form-data; name="caption"\r\n\r\n{caption}\r\n'
+                f"--{boundary}\r\n"
+                f'Content-Disposition: form-data; name="photo"; filename="{filename}"\r\n'
+                f"Content-Type: {mime_type}\r\n\r\n"
+            ).encode("utf-8") + image_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
+            req = urllib.request.Request(url, data=body, headers={
+                "Content-Type": f"multipart/form-data; boundary={boundary}"
+            })
+            resp = urllib.request.urlopen(req, timeout=15, context=_ssl_ctx)
+            result = json.loads(resp.read().decode("utf-8"))
+            if result.get("ok"):
+                print(f"[TELEGRAM] Photo sent: {filename} ({len(image_bytes)} bytes)")
+                return f"Photo sent to Telegram successfully ({filename}, {len(image_bytes)} bytes)."
+            else:
+                return f"Telegram sendPhoto failed: {result}"
+
         return f"Unknown tool: {name}"
     except subprocess.TimeoutExpired:
         return "Error: timed out after 30 seconds"
@@ -620,23 +764,70 @@ def execute_tool(name, tool_input):
         return f"Error: {e}"
 
 
+def _build_system_prompt_cached():
+    """Build the system prompt as a list with cache_control for prompt caching."""
+    return [
+        {
+            "type": "text",
+            "text": AGENT_SYSTEM_PROMPT,
+            "cache_control": {"type": "ephemeral"}
+        }
+    ]
+
+
+def _build_state_reminder():
+    """Build a <system-reminder> with current state/memory for injection into messages."""
+    system_state = get_genesis_state(None)
+    recent_mem = "\n".join(_recent_memory_items[-5:]) if _recent_memory_items else "No memory entries yet."
+    return f"<system-reminder>\n## Current System State\n{system_state}\n\n## Recent Memory\n{recent_mem}\n</system-reminder>"
+
+
+# Prompt cache hit rate tracking
+_cache_stats = {"hits": 0, "misses": 0, "creation": 0}
+
+
+def _log_cache_stats(usage):
+    """Log prompt cache hit/miss from API response usage."""
+    cache_read = usage.get("cache_read_input_tokens", 0)
+    cache_create = usage.get("cache_creation_input_tokens", 0)
+    input_tokens = usage.get("input_tokens", 0)
+
+    if cache_read > 0:
+        _cache_stats["hits"] += 1
+    elif cache_create > 0:
+        _cache_stats["creation"] += 1
+    else:
+        _cache_stats["misses"] += 1
+
+    total = _cache_stats["hits"] + _cache_stats["misses"] + _cache_stats["creation"]
+    hit_rate = (_cache_stats["hits"] / total * 100) if total > 0 else 0
+
+    print(f"[CACHE] input={input_tokens} cached_read={cache_read} cached_create={cache_create} "
+          f"| hit_rate={hit_rate:.0f}% ({_cache_stats['hits']}/{total})")
+
+
 def call_claude(user_message, image_data=None, image_mime=None):
-    """Call Anthropic Claude with tools and optional vision. Runs an agentic loop until Claude is done."""
+    """Call Anthropic Claude with tools, prompt caching, and optional vision.
+    Runs an agentic loop until Claude is done."""
     import base64 as _b64
 
     if not ANTHROPIC_AVAILABLE:
         return None
 
-    # Build system prompt with current state
-    system_state = get_genesis_state(None)
-    recent_mem = "\n".join(_recent_memory_items[-5:]) if _recent_memory_items else "No memory entries yet."
-    system = AGENT_SYSTEM_PROMPT.format(system_state=system_state, recent_memory=recent_mem)
+    # Static system prompt with cache_control (never changes — maximizes cache hits)
+    system = _build_system_prompt_cached()
+
+    # Inject dynamic state/memory as a system-reminder prefix on the user message
+    state_reminder = _build_state_reminder()
 
     # Add text-only version to persistent history (don't store base64 images)
     history_text = user_message
     if image_data:
         history_text = f"[Sent image] {user_message}"
-    _conversation_history.append({"role": "user", "content": history_text})
+
+    # Prepend state reminder to the user message content
+    user_content_for_history = f"{state_reminder}\n\n{history_text}"
+    _conversation_history.append({"role": "user", "content": user_content_for_history})
     if len(_conversation_history) > _MAX_HISTORY:
         _conversation_history.pop(0)
 
@@ -655,7 +846,7 @@ def call_claude(user_message, image_data=None, image_mime=None):
                     "data": b64_image,
                 },
             },
-            {"type": "text", "text": user_message},
+            {"type": "text", "text": f"{state_reminder}\n\n{user_message}"},
         ]
         working_messages[-1] = {"role": "user", "content": multimodal_content}
         print(f"[CLAUDE] Sending multimodal message ({len(image_data)} byte image + text)")
@@ -682,6 +873,10 @@ def call_claude(user_message, image_data=None, image_mime=None):
             )
             resp = urllib.request.urlopen(req, timeout=120, context=_ssl_ctx)
             data = json.loads(resp.read().decode("utf-8"))
+
+            # Log cache stats from response
+            usage = data.get("usage", {})
+            _log_cache_stats(usage)
 
             content = data.get("content", [])
             stop_reason = data.get("stop_reason", "end_turn")
@@ -769,6 +964,122 @@ def _save_memory_to_disk(lines):
         print(f"[MEMORY] Save failed: {e}", file=sys.stderr)
 
 
+def _save_journal_entries(entries):
+    """Write journal entries to daily markdown file and optionally notify Telegram."""
+    try:
+        today = time.strftime("%Y-%m-%d")
+        journal_file = os.path.join(JOURNAL_DIR, f"{today}.md")
+        now = time.strftime("%H:%M")
+
+        # Check if file exists — if not, write the header
+        is_new = not os.path.exists(journal_file)
+
+        with open(journal_file, "a") as f:
+            if is_new:
+                f.write(f"# As the Kernel Turns \u2014 {today}\n\n")
+
+            for entry in entries:
+                # Parse: agent_name|tick|entry_text
+                parts = entry.split("|", 2)
+                if len(parts) == 3:
+                    agent_name, tick, text = parts[0], parts[1], parts[2]
+                    if agent_name == "Recap":
+                        f.write(f"## Boot Recap \u2014 Previously on As the Kernel Turns...\n")
+                        f.write(f"{text}\n\n")
+                    else:
+                        f.write(f"## {now} \u2014 {agent_name}\n")
+                        f.write(f"{text}\n\n")
+
+        print(f"[JOURNAL] Saved {len(entries)} entries to {journal_file}")
+
+        # Send condensed Telegram notification (one message for all entries)
+        if TELEGRAM_AVAILABLE and entries:
+            telegram_lines = ["\U0001f4d6 *As the Kernel Turns*"]
+            for entry in entries:
+                parts = entry.split("|", 2)
+                if len(parts) == 3:
+                    agent_name, _, text = parts
+                    # Truncate for Telegram
+                    snippet = text[:200] + ("..." if len(text) > 200 else "")
+                    if agent_name == "Recap":
+                        telegram_lines.append(f"\n_Previously on..._\n{snippet}")
+                    else:
+                        telegram_lines.append(f"\n*{agent_name}:*\n{snippet}")
+            send_telegram("\n".join(telegram_lines))
+
+    except Exception as e:
+        print(f"[JOURNAL] Save failed: {e}", file=sys.stderr)
+
+
+def _save_ambition(ambition_text):
+    """Save today's ambition to a daily file (append-only — keeps history within the day)."""
+    try:
+        today = time.strftime("%Y-%m-%d")
+        ambition_file = os.path.join(AMBITION_DIR, f"{today}.txt")
+        now = time.strftime("%H:%M:%S")
+
+        with open(ambition_file, "a") as f:
+            f.write(f"[{now}] {ambition_text}\n")
+
+        print(f"[AMBITION] Saved to {ambition_file}: {ambition_text[:80]}")
+
+        # Also notify Telegram
+        if TELEGRAM_AVAILABLE:
+            send_telegram(f"\U0001f3af *Ambition Set*\n{ambition_text}")
+
+    except Exception as e:
+        print(f"[AMBITION] Save failed: {e}", file=sys.stderr)
+
+
+def _send_ambition_to_genesis(process):
+    """Load today's ambition from disk and send to Genesis via serial.
+    Also sends last 5 days of ambitions as history for context."""
+    try:
+        today = time.strftime("%Y-%m-%d")
+        ambition_file = os.path.join(AMBITION_DIR, f"{today}.txt")
+
+        # Send today's ambition (use the most recent line in today's file)
+        if os.path.exists(ambition_file):
+            with open(ambition_file, "r") as f:
+                lines = [l.strip() for l in f.readlines() if l.strip()]
+            if lines:
+                # Get the most recent ambition (last line), strip the timestamp
+                last_line = lines[-1]
+                # Strip [HH:MM:SS] prefix if present
+                if last_line.startswith("[") and "] " in last_line:
+                    ambition = last_line.split("] ", 1)[1]
+                else:
+                    ambition = last_line
+                msg = f"[AMBITION_LOAD] {ambition}\n"
+                process.stdin.write(msg.encode("utf-8"))
+                process.stdin.flush()
+                print(f"[AMBITION] Sent today's ambition to Genesis: {ambition[:80]}")
+        else:
+            print(f"[AMBITION] No ambition file for {today} — Genesis will use default")
+
+        # Send recent ambition history (last 5 days, for context / recap)
+        ambition_files = sorted(Path(AMBITION_DIR).glob("*.txt"), reverse=True)
+        for af in ambition_files[:5]:
+            date_str = af.stem  # e.g. "2026-02-21"
+            if date_str == today:
+                continue  # already sent as AMBITION_LOAD
+            with open(af, "r") as f:
+                lines = [l.strip() for l in f.readlines() if l.strip()]
+            if lines:
+                last_line = lines[-1]
+                if last_line.startswith("[") and "] " in last_line:
+                    ambition = last_line.split("] ", 1)[1]
+                else:
+                    ambition = last_line
+                msg = f"[AMBITION_HISTORY] {date_str}: {ambition}\n"
+                process.stdin.write(msg.encode("utf-8"))
+                process.stdin.flush()
+                time.sleep(0.01)
+
+    except Exception as e:
+        print(f"[AMBITION] Load failed: {e}", file=sys.stderr)
+
+
 def _send_memory_to_genesis(process):
     """Read persisted memory from disk and send to Genesis via serial."""
     if not os.path.exists(MEMORY_PERSIST_FILE):
@@ -842,6 +1153,38 @@ def listen_to_genesis(process, input_queue):
                             print("[MEMORY] Genesis requested persisted memories — sending...")
                             threading.Thread(
                                 target=_send_memory_to_genesis,
+                                args=(process,),
+                                daemon=True,
+                            ).start()
+
+                        # ── Agent journal ("As the Kernel Turns") ──
+                        elif "[JOURNAL]" in line and "[JOURNAL_DONE]" not in line and "[JOURNAL_START]" not in line:
+                            entry_data = re.sub(r'.*\[JOURNAL\]\s*', '', line)
+                            if entry_data:
+                                _journal_buffer.append(entry_data)
+                        elif "[JOURNAL_DONE]" in line:
+                            if _journal_buffer:
+                                entries = list(_journal_buffer)
+                                _journal_buffer.clear()
+                                threading.Thread(
+                                    target=_save_journal_entries,
+                                    args=(entries,),
+                                    daemon=True,
+                                ).start()
+
+                        # ── Ambition persistence ──
+                        elif "[AMBITION_SET]" in line:
+                            ambition_text = re.sub(r'.*\[AMBITION_SET\]\s*', '', line)
+                            if ambition_text:
+                                threading.Thread(
+                                    target=_save_ambition,
+                                    args=(ambition_text,),
+                                    daemon=True,
+                                ).start()
+                        elif "[AMBITION_REQUEST]" in line:
+                            print("[AMBITION] Genesis requested today's ambition — sending...")
+                            threading.Thread(
+                                target=_send_ambition_to_genesis,
                                 args=(process,),
                                 daemon=True,
                             ).start()

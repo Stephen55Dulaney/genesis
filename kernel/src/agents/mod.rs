@@ -176,6 +176,17 @@ pub trait Agent: Send + Debug {
     }
 
     // =========================================================================
+    // Journal — "As the Kernel Turns"
+    // =========================================================================
+
+    /// Write a first-person journal entry reflecting on the agent's experience.
+    /// Called periodically by the supervisor. Returns None if the agent has
+    /// nothing to say right now.
+    fn journal_entry(&self, _tick: u64) -> Option<String> {
+        None
+    }
+
+    // =========================================================================
     // Genesis Protocol - The Soul-Body Connection
     // =========================================================================
     

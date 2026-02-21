@@ -62,8 +62,12 @@ pub struct Supervisor {
     constellation_of_insights: Vec<FeedbackType>,
     /// Serendipity check counter (scan for connections every N ticks)
     serendipity_counter: u64,
+    /// Themes already broadcast by serendipity (prevent repeat notifications)
+    serendipity_seen_themes: Vec<String>,
     /// Rhythm counter for periodic checkpoint and report cycles
     rhythm_counter: u64,
+    /// Journal counter for periodic "As the Kernel Turns" entries
+    journal_counter: u64,
 }
 
 impl Supervisor {
@@ -107,7 +111,9 @@ impl Supervisor {
             heartbeat_counter: 0,
             constellation_of_insights: Vec::new(),
             serendipity_counter: 0,
+            serendipity_seen_themes: Vec::new(),
             rhythm_counter: 0,
+            journal_counter: 0,
         }
     }
     
@@ -199,6 +205,9 @@ impl Supervisor {
         
         serial_println!("[SETUP] Environment setup complete!");
         serial_println!("[SETUP] Desktop layout ready for rendering");
+
+        // Journal: "Previously on As the Kernel Turns..." boot recap
+        self.emit_boot_recap();
     }
     
     /// Trigger environment setup - agents organize before GUI
@@ -409,6 +418,13 @@ impl Supervisor {
             }
         }
 
+        // Journal: "As the Kernel Turns" entries (every 90,000 ticks ~15 min)
+        self.journal_counter += 1;
+        if self.journal_counter >= 90_000 {
+            self.emit_journal_entries();
+            self.journal_counter = 0;
+        }
+
         // Status report (every 120,000 ticks ~20 min)
         if self.rhythm_counter % 120_000 == 0 {
             serial_println!("[REPORT] Periodic status report at tick {}", self.tick);
@@ -433,17 +449,30 @@ impl Supervisor {
     }
     
     /// Serendipity Engine: Find overlapping themes using memory search
+    /// Guard: skip themes already broadcast to prevent feedback loops where
+    /// connection entries (which contain the theme keyword) amplify future searches.
     fn check_serendipity(&mut self) {
         let stats = memory_store::stats();
         if stats.entry_count < 2 {
             return;
         }
 
+        // Cap seen themes list to prevent unbounded growth (keep last 20)
+        if self.serendipity_seen_themes.len() > 20 {
+            self.serendipity_seen_themes.drain(..10);
+        }
+
         // Use the memory store's top keywords to find the strongest theme
-        // Only broadcast ONE connection per serendipity check to avoid duplicate notifications
+        // Only broadcast ONE connection per serendipity check
+        // Skip themes we've already broadcast (prevents feedback loops)
         if !stats.top_keywords.is_empty() {
             for (keyword, count) in stats.top_keywords.iter().take(5) {
                 if *count >= 2 {
+                    // Skip if we already broadcast this theme
+                    if self.serendipity_seen_themes.iter().any(|t| t == keyword) {
+                        continue;
+                    }
+
                     let results = memory_store::search(keyword);
                     if results.len() >= 2 {
                         let first_preview = memory_store::get(results[0].0)
@@ -471,7 +500,8 @@ impl Supervisor {
                                 }),
                             );
                             self.message_queue.push(connection_msg);
-                            serial_println!("[SERENDIPITY] Theme '{}' ({} entries, {} hits) — broadcasted connection",
+                            self.serendipity_seen_themes.push(keyword.clone());
+                            serial_println!("[SERENDIPITY] Theme '{}' ({} entries, {} hits) — broadcasted connection (new theme)",
                                 keyword, count, results.len());
                             break; // Only one notification per cycle
                         }
@@ -481,6 +511,51 @@ impl Supervisor {
         }
     }
     
+    // =========================================================================
+    // Journal — "As the Kernel Turns"
+    // =========================================================================
+
+    /// Emit journal entries from all agents via serial protocol
+    fn emit_journal_entries(&mut self) {
+        serial_println!("[JOURNAL_START]");
+        for agent in self.agents.iter() {
+            if let Some(entry) = agent.journal_entry(self.tick) {
+                // Escape newlines and pipes in entry text for single-line serial transport
+                let escaped = entry.replace('\n', " ").replace('|', "-");
+                serial_println!("[JOURNAL] {}|{}|{}", agent.name(), self.tick, escaped);
+            }
+        }
+        serial_println!("[JOURNAL_DONE]");
+    }
+
+    /// Emit a "Previously on As the Kernel Turns..." boot recap from recent memory
+    fn emit_boot_recap(&self) {
+        let recent = memory_store::recent(5);
+        if recent.is_empty() {
+            serial_println!("[JOURNAL] Recap|0|Previously on As the Kernel Turns... This is a fresh start. No memories from before. The agents are waking up for what might be the very first time.");
+            serial_println!("[JOURNAL_DONE]");
+            return;
+        }
+
+        // Build a recap from the most recent memory entries
+        let mut recap = String::from("Previously on As the Kernel Turns... ");
+        for entry in recent.iter() {
+            // Truncate long entries for the recap
+            let snippet: String = if entry.content.len() > 100 {
+                let s: String = entry.content.chars().take(97).collect();
+                alloc::format!("{}...", s)
+            } else {
+                entry.content.clone()
+            };
+            recap.push_str(&alloc::format!("{} ({}) said: {}. ", entry.source, entry.kind.as_str(), snippet));
+        }
+
+        // Escape for serial transport
+        let escaped = recap.replace('\n', " ").replace('|', "-");
+        serial_println!("[JOURNAL] Recap|0|{}", escaped);
+        serial_println!("[JOURNAL_DONE]");
+    }
+
     /// Trigger morning ambitions for all agents
     pub fn morning_ambition(&mut self) {
         serial_println!("[SUPERVISOR] === MORNING AMBITION ===");
@@ -604,7 +679,12 @@ impl Supervisor {
 
         self.living_ambition = Some(ambition.clone());
 
-        // Persist the ambition to memory store so it survives reboots
+        // Persist ambition to host disk via bridge (daily file)
+        // Escape pipes and newlines for serial transport
+        let escaped = ambition.replace('|', "-").replace('\n', " ");
+        serial_println!("[AMBITION_SET] {}", escaped);
+
+        // Also persist to memory store for in-session search
         memory_store::store_with_timestamp(
             &alloc::format!("Living Ambition: {}", ambition),
             MemoryKind::Observation,

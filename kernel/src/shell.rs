@@ -152,6 +152,23 @@ impl Shell {
                         buf.push('\n');
                     }
                     self.buffer.clear();
+                } else if self.buffer.starts_with("[AMBITION_LOAD]") {
+                    // Bridge is sending today's persisted ambition
+                    let ambition = self.buffer.strip_prefix("[AMBITION_LOAD]").unwrap_or("").trim();
+                    if !ambition.is_empty() {
+                        use crate::serial_println;
+                        serial_println!("[AMBITION] Loaded today's ambition from disk: \"{}\"", ambition);
+                        supervisor.breathe(String::from(ambition));
+                    }
+                    self.buffer.clear();
+                } else if self.buffer.starts_with("[AMBITION_HISTORY]") {
+                    // Bridge is sending recent ambition history (for context)
+                    let history_line = self.buffer.strip_prefix("[AMBITION_HISTORY]").unwrap_or("").trim();
+                    if !history_line.is_empty() {
+                        use crate::serial_println;
+                        serial_println!("[AMBITION] History: {}", history_line);
+                    }
+                    self.buffer.clear();
                 } else if self.buffer.starts_with("[TELEGRAM_REPLY]") {
                     // Outgoing reply from agent — don't display locally, bridge handles it
                     self.buffer.clear();
@@ -179,7 +196,7 @@ impl Shell {
                 if self.buffer.len() < MAX_COMMAND_LEN {
                     self.buffer.push(c);
                     // Don't echo bridge responses (they'll be displayed clean on Enter)
-                    if !self.buffer.starts_with("[LLM_") && !self.buffer.starts_with("[TELEGRAM") && !self.buffer.starts_with("[MEMORY_LOAD") {
+                    if !self.buffer.starts_with("[LLM_") && !self.buffer.starts_with("[TELEGRAM") && !self.buffer.starts_with("[MEMORY_LOAD") && !self.buffer.starts_with("[AMBITION_") {
                         print!("{}", c);
                         crate::serial_print!("{}", c); // Also to serial
                     }

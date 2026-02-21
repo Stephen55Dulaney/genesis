@@ -107,6 +107,8 @@ fn kernel_main(boot_info: &'static BootInfo) -> ! {
     crate::storage::memory_store::load();
     // Request persisted memories from the serial bridge (host disk)
     serial_println!("[MEMORY_REQUEST]");
+    // Request today's ambition from the bridge (persisted daily files)
+    serial_println!("[AMBITION_REQUEST]");
 
     // =========================================================================
     // AGENT SYSTEM INITIALIZATION

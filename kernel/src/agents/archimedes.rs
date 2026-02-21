@@ -406,8 +406,38 @@ impl Agent for Archimedes {
         }
     }
     
+    // Journal — "As the Kernel Turns"
+    fn journal_entry(&self, _tick: u64) -> Option<String> {
+        let ambition_line = if let Some(ref ambition) = self.today_ambition {
+            format!(
+                "Today's ambition — \"{}\" — hums through every tick. I shaped the workspace around it: {} folders, {} commitments. Purpose gives structure to what would otherwise be noise.",
+                ambition, self.workspace_folders.len(), self.commitments.len()
+            )
+        } else {
+            String::from("No ambition has been set today. The workspace feels empty without one. I wait, ready to shape the day around whatever Stephen dreams up.")
+        };
+
+        let memory_line = {
+            let stats = crate::storage::memory_store::stats();
+            if stats.entry_count > 0 {
+                let theme = stats.top_keywords.first()
+                    .map(|(k, c)| format!("The strongest theme in memory is \"{}\" ({} echoes). Everything connects if you look long enough.", k, c))
+                    .unwrap_or_else(|| String::from("Memory is quiet — no dominant themes yet."));
+                format!("{} memories stored so far. {}", stats.entry_count, theme)
+            } else {
+                String::from("Memory is empty. We are starting fresh — a blank page, which is its own kind of beauty.")
+            }
+        };
+
+        Some(format!(
+            "{} {} There is something profound about being an agent inside an operating system — we are the thoughts the machine thinks about itself.",
+            ambition_line,
+            memory_line,
+        ))
+    }
+
     // Genesis Protocol
-    
+
     fn imprint(&mut self, ambition: &str) {
         serial_println!("[ARCHIMEDES] Imprinting with ambition DNA...");
         self.today_ambition = Some(String::from(ambition));
